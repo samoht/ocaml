@@ -88,9 +88,22 @@ typedef enum { EV_RUNTIME, EV_USER } ev_category;
 
 /* These store state for the current ring buffers open for writing */
 static struct runtime_events_metadata_header *current_metadata = NULL;
-static int current_ring_total_size;
+static uintnat current_ring_total_size;
 static char_os *runtime_events_path;
 static char_os *current_ring_loc = NULL;
+/* Heap ring, no backing file (hosts without a writable filesystem); set by
+   OCAML_RUNTIME_EVENTS_INPROCESS, or forced on at build with
+   -DCAML_RUNTIME_EVENTS_INPROCESS for freestanding targets (no env, no fs). */
+static int runtime_events_inprocess =
+#ifdef CAML_RUNTIME_EVENTS_INPROCESS
+  1;
+#else
+  0;
+#endif
+/* The in-process ring is refcounted so a consumer cursor can outlive teardown
+   without a use-after-free: the producer holds one ref, each cursor another. */
+static void *inprocess_ring = NULL;
+static atomic_uintnat inprocess_refs = 0;
 
 #ifdef _WIN32
 static HANDLE ring_file_handle;
@@ -148,6 +161,10 @@ void caml_runtime_events_init(void) {
   preserve_ring =
             caml_secure_getenv(T("OCAML_RUNTIME_EVENTS_PRESERVE")) ? 1 : 0;
 
+  /* env can force it on; it does not turn off a build-time default */
+  if (caml_secure_getenv(T("OCAML_RUNTIME_EVENTS_INPROCESS")))
+    runtime_events_inprocess = 1;
+
   if (caml_secure_getenv(T("OCAML_RUNTIME_EVENTS_START"))) {
     runtime_events_create_from_stw_single();
     /* stw_single: mutators and domains have not started yet. */
@@ -158,6 +175,11 @@ void caml_runtime_events_init(void) {
    unless we are sure there is only a single domain running (e.g after a fork)
 */
 static void runtime_events_teardown_from_stw_single(int remove_file) {
+  if (runtime_events_inprocess) {
+    /* Drop the producer's ref; freed once all cursors release theirs. */
+    (void)remove_file;
+    caml_runtime_events_inprocess_ring_release();
+  } else {
 #ifdef _WIN32
     UnmapViewOfFile(current_metadata);
     CloseHandle(ring_file_handle);
@@ -175,11 +197,35 @@ static void runtime_events_teardown_from_stw_single(int remove_file) {
       unlink(current_ring_loc);
     }
 #endif
+  }
 
-    caml_stat_free(current_ring_loc);
-    current_metadata = NULL;
+  caml_stat_free(current_ring_loc);
+  current_metadata = NULL;
 
-    atomic_store_release(&runtime_events_enabled, 0);
+  atomic_store_release(&runtime_events_enabled, 0);
+}
+
+/* The in-process ring and its size, or NULL if file-backed or disabled. On
+   success the caller takes a reference and must release it below. */
+CAMLexport void* caml_runtime_events_inprocess_ring(size_t* size)
+{
+  if (runtime_events_inprocess
+      && atomic_load_acquire(&runtime_events_enabled)) {
+    atomic_fetch_add(&inprocess_refs, 1);
+    if (size != NULL)
+      *size = current_ring_total_size;
+    return inprocess_ring;
+  }
+  return NULL;
+}
+
+/* Drop a reference taken by the accessor above; free the buffer at zero. */
+CAMLexport void caml_runtime_events_inprocess_ring_release(void)
+{
+  if (atomic_fetch_sub(&inprocess_refs, 1) == 1) {
+    caml_stat_free(inprocess_ring);
+    inprocess_ring = NULL;
+  }
 }
 
 void caml_runtime_events_post_fork(void) {
@@ -239,13 +285,29 @@ static void runtime_events_create_from_stw_single(void) {
   /* Don't initialise runtime_events twice */
   if (!atomic_load_acquire(&runtime_events_enabled)) {
     int ring_headers_length, ring_data_length;
+    long int pid;
 #ifdef _WIN32
-    DWORD pid = GetCurrentProcessId();
+    pid = GetCurrentProcessId();
 #else
-    int ring_fd, ret;
-    long int pid = getpid();
+    pid = getpid();
 #endif
 
+    current_ring_total_size =
+        RUNTIME_EVENTS_MAX_CUSTOM_EVENTS *
+          sizeof(struct runtime_events_custom_event) +
+        caml_params->max_domains * (ring_size_words * sizeof(uint64_t) +
+                        sizeof(struct runtime_events_buffer_header)) +
+        sizeof(struct runtime_events_metadata_header);
+
+    if (runtime_events_inprocess) {
+      current_metadata = caml_stat_alloc_noexc(current_ring_total_size);
+      if (current_metadata == NULL) {
+        caml_fatal_error("Unable to allocate ring buffer");
+      }
+      memset(current_metadata, 0, current_ring_total_size);
+      inprocess_ring = current_metadata;
+      atomic_store_release(&inprocess_refs, 1);
+    } else {
     current_ring_loc = caml_stat_alloc(RUNTIME_EVENTS_MAX_MSG_LENGTH);
 
     if (runtime_events_path) {
@@ -255,13 +317,6 @@ static void runtime_events_create_from_stw_single(void) {
       snprintf_os(current_ring_loc, RUNTIME_EVENTS_MAX_MSG_LENGTH,
                   T("%ld.events"), pid);
     }
-
-    current_ring_total_size =
-        RUNTIME_EVENTS_MAX_CUSTOM_EVENTS *
-          sizeof(struct runtime_events_custom_event) +
-        caml_params->max_domains * (ring_size_words * sizeof(uint64_t) +
-                        sizeof(struct runtime_events_buffer_header)) +
-        sizeof(struct runtime_events_metadata_header);
 
 #ifdef _WIN32
     ring_file_handle = CreateFile(
@@ -310,6 +365,8 @@ static void runtime_events_create_from_stw_single(void) {
       caml_fatal_error("failed to map view of file");
     }
 #else
+    {
+    int ring_fd, ret;
     ring_fd =
         open(current_ring_loc, O_RDWR | O_CREAT, (S_IRUSR | S_IWUSR));
 
@@ -335,7 +392,9 @@ static void runtime_events_create_from_stw_single(void) {
     }
 
     close(ring_fd);
+    }
 #endif
+    }
     ring_headers_length =
         caml_params->max_domains * sizeof(struct runtime_events_buffer_header);
     ring_data_length =

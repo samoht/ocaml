@@ -54,6 +54,7 @@ struct caml_runtime_events_cursor {
   uint64_t *current_positions;      /* positions in the rings for each domain */
   size_t ring_file_size_bytes; /* size of the runtime_events file in bytes */
   int next_read_domain;        /* the next domain to read from */
+  int inprocess;               /* map is the borrowed in-process ring */
 #ifdef _WIN32
   HANDLE ring_file_handle;
   HANDLE ring_handle;
@@ -231,6 +232,11 @@ cursor_map_ring_file(struct caml_runtime_events_cursor *cursor,
 /* unmaps the ring file from a cursor */
 static void cursor_unmap_ring_file(struct caml_runtime_events_cursor *cursor)
 {
+  if (cursor->inprocess) {
+    /* borrowed buffer: drop our reference, the runtime frees it */
+    caml_runtime_events_inprocess_ring_release();
+    return;
+  }
 #ifdef _WIN32
   UnmapViewOfFile(cursor->map);
   CloseHandle(cursor->ring_file_handle);
@@ -255,16 +261,29 @@ runtime_events_error caml_runtime_events_create_cursor(
   /* zero out all fields, notably the callbacks */
   memset(cursor, 0, sizeof(*cursor));
 
-  char_os *ring_file;
-  ret = format_runtime_ring_file(runtime_events_path, pid,
-                                 &ring_file);
-  if (ret != E_SUCCESS) {
-    goto fail_format_file;
+  char_os *ring_file = NULL;
+
+  if (runtime_events_path == NULL) {
+    /* current process: use the in-process ring if there is one */
+    size_t inprocess_size;
+    void *inprocess = caml_runtime_events_inprocess_ring(&inprocess_size);
+    if (inprocess != NULL) {
+      cursor->inprocess = 1;
+      cursor->map = inprocess;
+      cursor->ring_file_size_bytes = inprocess_size;
+    }
   }
 
-  ret = cursor_map_ring_file(cursor, ring_file);
-  if (ret != E_SUCCESS) {
-    goto fail_map_ring_file;
+  if (!cursor->inprocess) {
+    ret = format_runtime_ring_file(runtime_events_path, pid, &ring_file);
+    if (ret != E_SUCCESS) {
+      goto fail_format_file;
+    }
+
+    ret = cursor_map_ring_file(cursor, ring_file);
+    if (ret != E_SUCCESS) {
+      goto fail_map_ring_file;
+    }
   }
 
   cursor->metadata = *(struct runtime_events_metadata_header*)cursor->map;

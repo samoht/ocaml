@@ -321,6 +321,11 @@ CAMLextern void caml_runtime_events_post_fork(void);
    freshly-allocated string. */
 CAMLextern char_os* caml_runtime_events_current_location(void);
 
+/* The in-process ring of this process and its size, or NULL if file-backed or
+   disabled. On success the caller takes a reference and must release it. */
+CAMLextern void* caml_runtime_events_inprocess_ring(size_t* size);
+CAMLextern void caml_runtime_events_inprocess_ring_release(void);
+
 /* Functions for putting runtime data on to the runtime_events. These are all
    internal to the runtime, except for caml_ev_lifecycle which is needed in
    otherlibs/unix/fork.c so must be declared CAMLextern in order to work on
