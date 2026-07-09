@@ -89,11 +89,15 @@ endif
 	$(MAKE) dynlink-all $(CROSS_OVERRIDES) $(OLDS)
 	$(MAKE) -C otherlibs all $(CROSS_OVERRIDES) $(OLDS)
 	$(MAKE) runtimeopt $(OLDS)
+# Host binaries: drop OC_NATIVE_COMPFLAGS (e.g. -function-sections, which a
+# Mach-O host ocamlopt rejects); the target phases below keep it.
 	$(MAKE) ocamlc.opt ocamlopt.opt $(TOOLS_NATIVE_TARGETS) \
-	  $(CROSS_COMPILER_OVERRIDES) "$(HOST_ZSTD_LIBS)" $(OLDS)
+	  $(CROSS_COMPILER_OVERRIDES) OC_NATIVE_COMPFLAGS= \
+	  "$(HOST_ZSTD_LIBS)" $(OLDS)
 	$(MAKE) libraryopt $(CROSS_OVERRIDES) $(OLDS)
 	$(MAKE) otherlibrariesopt ocamltoolsopt $(CROSS_OVERRIDES) $(OLDS)
-	$(MAKE) tools-allopt.opt $(CROSS_COMPILER_OVERRIDES) $(OLDS)
+	$(MAKE) tools-allopt.opt $(CROSS_COMPILER_OVERRIDES) OC_NATIVE_COMPFLAGS= \
+	  $(OLDS)
 	# We now build the compiler libs again, but for target this time
 	rm -f $(ocamlcommon_NCOBJS) $(ocamlmiddleend_NCOBJS) \
 	  $(ocamlbytecomp_NCOBJS) $(ocamloptcomp_NCOBJS) \
