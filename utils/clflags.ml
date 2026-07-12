@@ -190,7 +190,8 @@ let afl_instrument = ref Config.afl_instrument (* -afl-instrument *)
 let afl_inst_ratio = ref 100           (* -afl-inst-ratio *)
 let whole_program_rebuild = ref false  (* -use-lto *)
 
-let function_sections = ref false      (* -function-sections *)
+let function_sections = ref Config.function_sections
+                                        (* -function-sections *)
 
 let simplify_rounds = ref None        (* -rounds *)
 let default_simplify_rounds = ref 1        (* -rounds *)
