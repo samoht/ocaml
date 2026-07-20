@@ -16,14 +16,19 @@
    stops at a partial link, which is the only kind a -nopervasives program can
    complete (no runtime library is linked in).
 
-   The conditional raise is an observable effect, so the [used] call feeding
-   it survives; [_pure] is dead pure initialization work (a call, so beyond
-   [Effect_analysis]) that the whole-program purity analysis removes. *)
+   The conditional raise is an observable effect on a value the compiler
+   cannot see ([%opaque]), so the [used] call feeding it survives -- without
+   the barrier the link-time partial evaluator would decide the match and
+   discharge the guard entirely.  [_pure] is dead pure initialization work
+   (a call, so beyond [Effect_analysis]) that the whole-program cleanup
+   removes. *)
 
 external raise : exn -> 'a = "%raise"
 
+external opaque : int -> int = "%opaque"
+
 exception Check
 
-let () = match Lib_dce.used 41 with 0 -> raise Check | _ -> ()
+let () = match Lib_dce.used (opaque 41) with 0 -> raise Check | _ -> ()
 
 let _pure = Lib_dce.used 7

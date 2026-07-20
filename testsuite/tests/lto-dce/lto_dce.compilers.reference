@@ -12,11 +12,11 @@
 -use-lto why-live "used":
   camlLib_dce__used_38
     <- camlLib_dce$used_11_closure
-    <- camlLto_dce__*match*_97
-    <- camlLto_dce__Pintcomp_96
+    <- camlLto_dce__*match*_100
+    <- camlLto_dce__Pintcomp_99
     <- kept by a root (the program result or a top-level effect)
   camlLib_dce$used_11_closure
-    <- camlLto_dce__*match*_97
-    <- camlLto_dce__Pintcomp_96
+    <- camlLto_dce__*match*_100
+    <- camlLto_dce__Pintcomp_99
     <- kept by a root (the program result or a top-level effect)
 
