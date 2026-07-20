@@ -1100,6 +1100,179 @@ let count_format_entry_sites (program : Flambda.program) =
         expr);
   !sites
 
+(* Field-aware single-use collapse.
+
+   After symbol lifting, every function's closure escapes through symbols,
+   so the inliner's only_use_of_function heuristic can never fire at the
+   link even for a function with one reachable call site.  Recover it
+   structurally: a closure applied directly at exactly one site, whose
+   closure value is only ever let-bound to feed such applies, is marked
+   Always_inline at that site.  The zero-budget round then moves the body
+   into the caller (size-neutral: the projection that fed the call becomes
+   dead, the block field that fed the projection is dummied by the purity
+   pass, and the original declaration dies on the next cleanup round), and
+   the constants of the call site fold through the moved body -- a backend
+   wrapper chain applied once to a literal device list collapses one layer
+   per round, taking gated cones with it.  Explicit [@inline never],
+   self-recursive functions, closures also referenced as values, and
+   callees that declare their own sets of closures are left alone; an
+   indirect call missed by the count only costs a duplicated body until
+   the field-level cleanup catches up, never correctness.
+
+   Only size-neutral moves are marked here, so the zero-budget cleanup
+   cannot grow the program.  Unrolling a recursive callee over a literal
+   argument is [-lto-inline]'s job, driven by the ordinary inliner's
+   budgets. *)
+
+let mark_single_use_applies (program : Flambda.program) =
+  let bodies = function_bodies program in
+  let closure_syms = ref Symbol.Map.empty in
+  let rec collect_syms (body : Flambda.program_body) =
+    match body with
+    | Let_symbol (s, Project_closure (_, cid), k) ->
+      closure_syms := Symbol.Map.add s cid !closure_syms; collect_syms k
+    | Let_symbol (_, _, k) | Initialize_symbol (_, _, _, k)
+    | Effect (_, k) -> collect_syms k
+    | Let_rec_symbol (l, k) ->
+      List.iter
+        (function
+          | (s, Flambda.Project_closure (_, cid)) ->
+            closure_syms := Symbol.Map.add s cid !closure_syms
+          | _ -> ())
+        l;
+      collect_syms k
+    | End _ -> ()
+  in
+  collect_syms program.program_body;
+  let apply_count = ref Closure_id.Map.empty in
+  let bound_to = ref Variable.Map.empty in
+  let value_use = ref Variable.Map.empty in
+  let bump m k =
+    m := Variable.Map.update k
+        (function None -> Some 1 | Some n -> Some (n + 1)) !m
+  in
+  let use_var v = bump value_use v in
+  let visit_expr (expr : Flambda.t) =
+    match expr with
+    | Apply { func; args; kind; _ } ->
+      List.iter use_var args;
+      (match kind with
+       | Direct cid ->
+         apply_count :=
+           Closure_id.Map.update cid
+             (function None -> Some 1 | Some n -> Some (n + 1)) !apply_count;
+         (* [func] counted separately below as a func-position use. *)
+         bump value_use func;
+         value_use := Variable.Map.update func
+             (function Some n -> Some (n - 1) | None -> None) !value_use
+       | Indirect -> use_var func)
+    | Var v -> use_var v
+    | Assign { new_value; _ } -> use_var new_value
+    | If_then_else (v, _, _) | Switch (v, _) | String_switch (v, _, _) ->
+      use_var v
+    | Static_raise (_, vs) -> List.iter use_var vs
+    | Send { meth; obj; args; _ } ->
+      use_var meth; use_var obj; List.iter use_var args
+    | For { from_value; to_value; _ } -> use_var from_value; use_var to_value
+    | Let _ | Let_mutable _ | Static_catch _ | Try_with _ | While _
+    | Proved_unreachable -> ()
+  and visit_named (named : Flambda.named) =
+    match named with
+    | Prim (_, vs, _) -> List.iter use_var vs
+    | Expr _ | Symbol _ | Const _ | Allocated_const _ | Read_mutable _
+    | Read_symbol_field _ | Set_of_closures _ | Project_closure _
+    | Project_var _ | Move_within_set_of_closures _ -> ()
+  in
+  let record_binding var (named : Flambda.named) =
+    match named with
+    | Symbol s ->
+      (match Symbol.Map.find_opt s !closure_syms with
+       | Some cid -> bound_to := Variable.Map.add var cid !bound_to
+       | None -> ())
+    | Project_closure { closure_id; _ } ->
+      bound_to := Variable.Map.add var closure_id !bound_to
+    | _ -> ()
+  in
+  Flambda_iterators.iter_exprs_at_toplevel_of_program program
+    ~f:(fun expr ->
+      Flambda_iterators.iter visit_expr visit_named expr;
+      Flambda_iterators.iter_all_immutable_let_bindings expr
+        ~f:record_binding);
+  let self_applies cid =
+    match Closure_id.Map.find_opt cid bodies with
+    | None -> max_int
+    | Some (decl : Flambda.function_declaration) ->
+      let n = ref 0 in
+      Flambda_iterators.iter
+        (fun (e : Flambda.t) ->
+          match e with
+          | Apply { kind = Direct cid'; _ }
+            when Closure_id.equal cid cid' -> incr n
+          | _ -> ())
+        (fun _ -> ())
+        decl.body;
+      !n
+  in
+  let self_recursive cid = self_applies cid > 0 in
+  (* Moving a body that declares its own set of closures duplicates the
+     declaration under fresh closure ids.  When such a closure escapes the
+     callee -- the generative-injector shape [let inj x = M.V x in
+     (inj, proj)] returns its closures -- other units were compiled
+     against the original ids: their bodies hold [Project_var]s naming
+     closure ids that the renamed copy does not answer to, and the
+     whole-program simplifier faults on the mismatch.  Per-unit
+     compilation cannot hit this (export info is final once a consumer
+     compiles against it); only the link re-optimizes a producer out from
+     under an already-compiled consumer.  Leave such callees where they
+     are declared. *)
+  let declares_closures cid =
+    match Closure_id.Map.find_opt cid bodies with
+    | None -> true
+    | Some (decl : Flambda.function_declaration) ->
+      let found = ref false in
+      Flambda_iterators.iter
+        (fun (_ : Flambda.t) -> ())
+        (fun (named : Flambda.named) ->
+          match named with
+          | Set_of_closures _ -> found := true
+          | _ -> ())
+        decl.body;
+      !found
+  in
+  let eligible cid =
+    (match Closure_id.Map.find_opt cid !apply_count with
+     | Some 1 -> true | _ -> false)
+    && (match Closure_id.Map.find_opt cid bodies with
+        | Some decl ->
+          (match decl.inline with
+           | Never_inline -> false
+           | Default_inline | Always_inline | Hint_inline | Unroll _ -> true)
+          && not decl.stub
+        | None -> false)
+    && Variable.Map.for_all
+         (fun var cid' ->
+           not (Closure_id.equal cid cid')
+           || (match Variable.Map.find_opt var !value_use with
+               | None -> true | Some n -> n <= 0))
+         !bound_to
+    && not (self_recursive cid)
+    && not (declares_closures cid)
+  in
+  let marked = ref 0 in
+  let rewrite (expr : Flambda.t) =
+    match expr with
+    | Apply ({ kind = Direct cid; inline = Default_inline; _ } as apply)
+      when eligible cid ->
+      incr marked;
+      Flambda.Apply { apply with inline = Always_inline }
+    | e -> e
+  in
+  let program =
+    Flambda_iterators.map_exprs_at_toplevel_of_program program
+      ~f:(fun expr -> Flambda_iterators.map rewrite (fun n -> n) expr)
+  in
+  program, !marked
+
 let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
   let codes = get_flambda_codes units_to_link in
   let program =
@@ -1200,6 +1373,7 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
       Remove_unused_program_constructs.remove_unused_program_constructs program
     in
     let program = preeval_initializers program in
+    let program, _marked_single_use = mark_single_use_applies program in
     let program =
       let pure = compute_pure_functions program in
       remove_pure_initializers ~pure program
