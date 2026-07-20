@@ -1,0 +1,18 @@
+-use-lto: kept 1 of 3 functions, eliminated 2 as dead code (66.7% of functions, 64.7% of code size)
+
+-use-lto dead-code elimination by unit (sizes in inlining-cost units):
+     dropped         kept  unit
+          11          1/3  Lib_dce
+
+-use-lto eliminated functions (size, closure origin):
+           7  Lib_dce.dead2/25
+           4  Lib_dce.dead1/33
+
+
+-use-lto why-live "used":
+  camlLib_dce__used_38
+    <- camlLib_dce$used_11_closure
+    <- kept by a root (the program result or a top-level effect)
+  camlLib_dce$used_11_closure
+    <- kept by a root (the program result or a top-level effect)
+
