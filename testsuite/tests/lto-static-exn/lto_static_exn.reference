@@ -1,0 +1,4 @@
+upper lower punct space digit digit space lower punct -1 0 1 none just(1) pair(2,3) many(4,5,..) 
+checksum=103 until=2 tri=55
+find=2 div=none line="hello"
+esc=a\n\t\"\\b\r\012\255z besc=x\ny\tz cesc=a\n\t\255 split=[a||b|c|]

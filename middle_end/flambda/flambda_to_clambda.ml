@@ -139,6 +139,9 @@ module Env : sig
   val add_fresh_mutable_ident : t -> Mutable_variable.t -> V.t * t
   val ident_for_mutable_var_exn : t -> Mutable_variable.t -> V.t
 
+  val add_static_exception : t -> Static_exception.t -> int * t
+  val find_static_exception : t -> Static_exception.t -> int
+
   val add_allocated_const : t -> Symbol.t -> Allocated_const.t -> t
   val allocated_const_for_symbol : t -> Symbol.t -> Allocated_const.t option
 
@@ -148,6 +151,15 @@ end = struct
     { subst : Clambda.ulambda Variable.Map.t;
       var : V.t Variable.Map.t;
       mutable_var : V.t Mutable_variable.Map.t;
+      (* Freshly-allocated Clambda static-fail label for each in-scope static
+         exception.  Under [-use-lto] the concatenated program carries static
+         exceptions deserialised from several units, each numbered from zero in
+         its own compilation, so their [to_int]s collide; lowering also mints new
+         ones from the same counter.  Trusting [to_int] as the label then yields
+         two Cmm handlers with the same continuation number in one function.
+         Allocating a fresh label per [Static_catch] here keeps every label in a
+         lowered function unique regardless of the source ids. *)
+      static_exn : int Static_exception.Map.t;
       allocated_constant_for_symbol : Allocated_const.t Symbol.Map.t;
     }
 
@@ -155,6 +167,7 @@ end = struct
     { subst = Variable.Map.empty;
       var = Variable.Map.empty;
       mutable_var = Mutable_variable.Map.empty;
+      static_exn = Static_exception.Map.empty;
       allocated_constant_for_symbol = Symbol.Map.empty;
     }
 
@@ -176,6 +189,22 @@ end = struct
     let id = V.create_local (Mutable_variable.name mut_var) in
     let mutable_var = Mutable_variable.Map.add mut_var id t.mutable_var in
     id, { t with mutable_var; }
+
+  let add_static_exception t static_exn =
+    let label = Static_exception.to_int (Static_exception.create ()) in
+    label, { t with static_exn = Static_exception.Map.add static_exn label t.static_exn }
+
+  let find_static_exception t static_exn =
+    match Static_exception.Map.find_opt static_exn t.static_exn with
+    | Some label -> label
+    | None ->
+      (* A raise whose catch is out of scope cannot arise from well-formed
+         Flambda.  Failing here names the culprit; the alternative is the
+         Cmm invariant check rejecting the lowered function, or a silent
+         miscompilation on builds that skip it. *)
+      Misc.fatal_errorf
+        "[Static_raise] of %a is not in scope of its [Static_catch]"
+        Static_exception.print static_exn
 
   let add_allocated_const t sym cons =
     { t with
@@ -308,16 +337,17 @@ let rec to_clambda t env (flam : Flambda.t) : Clambda.ulambda =
     let def = Option.map (to_clambda t env) def in
     Ustringswitch (arg, sw, def)
   | Static_raise (static_exn, args) ->
-    Ustaticfail (Static_exception.to_int static_exn,
+    Ustaticfail (Env.find_static_exception env static_exn,
       List.map (subst_var env) args)
   | Static_catch (static_exn, vars, body, handler) ->
+    let label, env = Env.add_static_exception env static_exn in
     let env_handler, ids =
       List.fold_right (fun (var, kind) (env, ids) ->
           let id, env = Env.add_fresh_ident env var in
           env, (VP.create id, kind) :: ids)
         vars (env, [])
     in
-    Ucatch (Static_exception.to_int static_exn, ids,
+    Ucatch (label, ids,
       to_clambda t env body, to_clambda t env_handler handler)
   | Try_with (body, var, handler) ->
     let id, env_handler = Env.add_fresh_ident env var in
