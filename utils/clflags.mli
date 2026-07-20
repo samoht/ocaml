@@ -222,6 +222,7 @@ val function_sections : bool ref
 val whole_program_rebuild : bool ref
 val dump_lto_dce : bool ref
 val lto_why_live : string option ref
+val lto_inline : bool ref
 
 val all_passes : string list ref
 val dumped_pass : string -> bool

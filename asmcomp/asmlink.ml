@@ -1085,8 +1085,13 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
         ~remove_direct_call_surrogates:false program
     in
     let program =
+      (* Inlining here is opt-in: with the whole program in view it can
+         specialise an interpreter over its statically known data (unrolling
+         make_printf over a format literal, say), after which the interpreter
+         itself is collected -- a large win on small images -- but its
+         speed-oriented duplication grows large programs. *)
       Inline_and_simplify.run
-        ~never_inline:true
+        ~never_inline:(not !Clflags.lto_inline)
         ~ppf_dump
         ~backend
         ~prefixname:"_link_"
