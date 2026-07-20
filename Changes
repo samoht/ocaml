@@ -15,6 +15,12 @@ OCaml 5.4.1+lto
   per-unit compilation misses is back in view at the `-use-lto` link.
   (Pierre Chambart, adapted and extended by Thomas Gazagnaire)
 
+- Add `-dlto-dce` and `-dlto-why-live=<substring>`, dump flags for the
+  `-use-lto` link: a per-unit table of eliminated code in the style of
+  linker section-GC reports, and retention chains back to a root in the
+  style of mold's `--why-live`.
+  (Thomas Gazagnaire)
+
 OCaml 5.4.1 (17 February 2026)
 ------------------------------
 

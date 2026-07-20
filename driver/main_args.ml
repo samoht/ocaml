@@ -678,6 +678,15 @@ let mk_dflambda f =
 let mk_drawflambda f =
   "-drawflambda", Arg.Unit f, " Print Flambda terms after closure conversion"
 
+let mk_dlto_dce f =
+  "-dlto-dce", Arg.Unit f, " Print a per-unit report of the dead code \
+      eliminated by a -use-lto link"
+
+let mk_dlto_why_live f =
+  "-dlto-why-live", Arg.String f,
+    "<substring>  Explain why each symbol whose linkage name contains \
+      <substring> is retained by a -use-lto link"
+
 let mk_dflambda_invariants f =
   "-dflambda-invariants", Arg.Unit f, " Check Flambda invariants \
       around each pass"
@@ -989,6 +998,8 @@ module type Optcommon_options = sig
   val _clambda_checks : unit -> unit
   val _dflambda : unit -> unit
   val _drawflambda : unit -> unit
+  val _dlto_dce : unit -> unit
+  val _dlto_why_live : string -> unit
   val _dflambda_invariants : unit -> unit
   val _dflambda_no_invariants : unit -> unit
   val _dflambda_let : int -> unit
@@ -1398,6 +1409,8 @@ struct
     mk_dcmm_invariants F._dcmm_invariants;
     mk_dflambda F._dflambda;
     mk_drawflambda F._drawflambda;
+    mk_dlto_dce F._dlto_dce;
+    mk_dlto_why_live F._dlto_why_live;
     mk_dflambda_invariants F._dflambda_invariants;
     mk_dflambda_no_invariants F._dflambda_no_invariants;
     mk_dflambda_let F._dflambda_let;
@@ -1519,6 +1532,8 @@ module Make_opttop_options (F : Opttop_options) = struct
     mk_dcmm_invariants F._dcmm_invariants;
     mk_drawflambda F._drawflambda;
     mk_dflambda F._dflambda;
+    mk_dlto_dce F._dlto_dce;
+    mk_dlto_why_live F._dlto_why_live;
     mk_dcmm F._dcmm;
     mk_dsel F._dsel;
     mk_dcombine F._dcombine;
@@ -1721,6 +1736,8 @@ module Default = struct
     let _dcombine = set dump_combine
     let _dcse = set dump_cse
     let _dflambda = set dump_flambda
+    let _dlto_dce = set dump_lto_dce
+    let _dlto_why_live s = lto_why_live := Some s
     let _dflambda_invariants = set flambda_invariant_checks
     let _dflambda_let stamp = dump_flambda_let := (Some stamp)
     let _dflambda_no_invariants = clear flambda_invariant_checks

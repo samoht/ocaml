@@ -362,6 +362,214 @@ let compile_implementation_flambda ~unit_prefix ~backend
     in
     Asmgen.end_gen_implementation ~ppf_dump clambda_with_constants)
 
+(* Dead-code-elimination statistics for the -use-lto report.  Functions are
+   counted with [Flambda_iterators] over nested and top-level closures alike,
+   so the figures are stable across the [Lift_constants] pass.  Sizes use the
+   inlining cost model, an architecture-independent proxy for generated-code
+   bytes.  Functions are keyed by closure origin, which the cleaning passes
+   preserve even as variables are freshened, so a function present before and
+   after cleaning is recognised as kept and an eliminated one can be named. *)
+type lto_stats = {
+  fun_count : int;
+  total_size : int;
+  by_origin : (int * int) Closure_origin.Map.t;
+  (* per origin: number of function declarations and their cumulative size *)
+}
+
+let program_stats program =
+  let fun_count = ref 0 in
+  let total_size = ref 0 in
+  let by_origin = ref Closure_origin.Map.empty in
+  Flambda_iterators.iter_on_set_of_closures_of_program program
+    ~f:(fun ~constant:_ (set : Flambda.set_of_closures) ->
+      Variable.Map.iter
+        (fun _fun_var (decl : Flambda.function_declaration) ->
+          let size =
+            match Inlining_cost.lambda_smaller' decl.body ~than:max_int with
+            | Some size -> size
+            | None -> 0
+          in
+          incr fun_count;
+          total_size := !total_size + size;
+          by_origin :=
+            Closure_origin.Map.update decl.closure_origin
+              (function
+                | None -> Some (1, size)
+                | Some (n, s) -> Some (n + 1, s + size))
+              !by_origin)
+        set.function_decls.funs);
+  { fun_count = !fun_count; total_size = !total_size; by_origin = !by_origin }
+
+let unit_of_origin origin =
+  Ident.name
+    (Compilation_unit.get_persistent_ident
+       (Closure_origin.get_compilation_unit origin))
+
+let report_dce ~ppf_dump ~(before : lto_stats) ~(after : lto_stats) =
+  let removed = before.fun_count - after.fun_count in
+  let removed_size = before.total_size - after.total_size in
+  let pct part whole =
+    if whole = 0 then 0.
+    else 100. *. float_of_int part /. float_of_int whole
+  in
+  Printf.eprintf
+    "-use-lto: kept %d of %d functions, eliminated %d as dead code \
+     (%.1f%% of functions, %.1f%% of code size)\n%!"
+    after.fun_count before.fun_count removed
+    (pct removed before.fun_count) (pct removed_size before.total_size);
+  if !Clflags.dump_lto_dce then begin
+    let kept origin = Closure_origin.Map.find_opt origin after.by_origin in
+    (* Aggregate per originating compilation unit. *)
+    let units = Hashtbl.create 42 in
+    Closure_origin.Map.iter
+      (fun origin (n, size) ->
+        let u = unit_of_origin origin in
+        let kn, ks = match kept origin with
+          | None -> 0, 0
+          | Some (kn, ks) -> kn, ks
+        in
+        let dn, ds, dkn, dks =
+          try Hashtbl.find units u with Not_found -> 0, 0, 0, 0
+        in
+        Hashtbl.replace units u (dn + n, ds + size, dkn + kn, dks + ks))
+      before.by_origin;
+    let units =
+      List.sort (fun (_, (_, s1, _, k1)) (_, (_, s2, _, k2)) ->
+          Int.compare (s2 - k2) (s1 - k1))
+        (Hashtbl.fold (fun u x acc -> (u, x) :: acc) units [])
+    in
+    Format.fprintf ppf_dump
+      "@.-use-lto dead-code elimination by unit \
+       (sizes in inlining-cost units):@.";
+    Format.fprintf ppf_dump "  %10s %12s  %s@." "dropped" "kept" "unit";
+    List.iter
+      (fun (u, (n, s, kn, ks)) ->
+        Format.fprintf ppf_dump "  %10d %12s  %s@." (s - ks)
+          (Printf.sprintf "%d/%d" kn n) u)
+      units;
+    let dropped =
+      Closure_origin.Map.fold
+        (fun origin (_, size) acc ->
+          match kept origin with
+          | Some _ -> acc
+          | None -> (size, origin) :: acc)
+        before.by_origin []
+    in
+    let dropped =
+      List.sort (fun (s1, _) (s2, _) -> Int.compare s2 s1) dropped
+    in
+    Format.fprintf ppf_dump
+      "@.-use-lto eliminated functions (size, closure origin):@.";
+    List.iter
+      (fun (size, origin) ->
+        Format.fprintf ppf_dump "  %10d  %a@." size
+          Closure_origin.print origin)
+      dropped;
+    Format.fprintf ppf_dump "@."
+  end
+
+(* Retention tracing for -dlto-why-live: rerun the reachability walk the
+   cleanup performs, this time remembering for every symbol which construct
+   first reached it, and print the chain of retainers for each symbol whose
+   linkage name contains the requested substring.  Runs on the cleaned
+   program, where every defined symbol is live, so the same roots (the
+   program result and the surviving top-level effects) reach them all. *)
+let why_live ~ppf_dump ~pattern (program : Flambda.program) =
+  let constant_deps (const : Flambda.constant_defining_value) =
+    match const with
+    | Allocated_const _ -> Symbol.Set.empty
+    | Block (_, fields) ->
+      Symbol.Set.of_list
+        (List.filter_map
+           (function
+             | (Symbol s : Flambda.constant_defining_value_block_field) ->
+               Some s
+             | Flambda.Const _ -> None)
+           fields)
+    | Set_of_closures set ->
+      Flambda.free_symbols_named (Set_of_closures set)
+    | Project_closure (s, _) -> Symbol.Set.singleton s
+  in
+  let defs = ref Symbol.Map.empty in
+  let add_def sym deps = defs := Symbol.Map.add sym deps !defs in
+  let roots = ref Symbol.Set.empty in
+  let rec walk (body : Flambda.program_body) =
+    match body with
+    | Let_symbol (s, def, k) -> add_def s (constant_deps def); walk k
+    | Let_rec_symbol (l, k) ->
+      List.iter (fun (s, def) -> add_def s (constant_deps def)) l;
+      walk k
+    | Initialize_symbol (s, _, fields, k) ->
+      add_def s
+        (List.fold_left
+           (fun acc field -> Symbol.Set.union acc (Flambda.free_symbols field))
+           Symbol.Set.empty fields);
+      walk k
+    | Effect (e, k) ->
+      roots := Symbol.Set.union (Flambda.free_symbols e) !roots;
+      walk k
+    | End syms -> roots := Symbol.Set.union syms !roots
+  in
+  walk program.program_body;
+  (* Breadth-first from the roots, recording the first retainer of each
+     symbol; first visits give shortest retention chains. *)
+  let parent = Symbol.Tbl.create 42 in
+  let queue = Queue.create () in
+  Symbol.Set.iter
+    (fun s ->
+      if not (Symbol.Tbl.mem parent s) then begin
+        Symbol.Tbl.add parent s None;
+        Queue.add s queue
+      end)
+    !roots;
+  while not (Queue.is_empty queue) do
+    let s = Queue.take queue in
+    match Symbol.Map.find_opt s !defs with
+    | None -> ()
+    | Some deps ->
+      Symbol.Set.iter
+        (fun dep ->
+          if not (Symbol.Tbl.mem parent dep) then begin
+            Symbol.Tbl.add parent dep (Some s);
+            Queue.add dep queue
+          end)
+        deps
+  done;
+  let name s = Linkage_name.to_string (Symbol.label s) in
+  let matches s =
+    let sym = name s and pat = pattern in
+    let sl = String.length sym and pl = String.length pat in
+    let rec at i = i + pl <= sl
+      && (String.equal (String.sub sym i pl) pat || at (i + 1))
+    in
+    pl > 0 && at 0
+  in
+  Format.fprintf ppf_dump "@.-use-lto why-live %S:@." pattern;
+  let found = ref false in
+  Symbol.Map.iter
+    (fun s _ ->
+      if matches s then begin
+        found := true;
+        Format.fprintf ppf_dump "  %s@." (name s);
+        let rec chain s =
+          match Symbol.Tbl.find parent s with
+          | None -> Format.fprintf ppf_dump "    <- kept by a root \
+              (the program result or a top-level effect)@."
+          | Some p -> Format.fprintf ppf_dump "    <- %s@." (name p); chain p
+          | exception Not_found ->
+            (* Unreachable from the roots: only referenced from function
+               bodies, e.g. a direct call.  Code references do not show in
+               the symbol graph; the caller is in the -dlto-dce listing. *)
+            Format.fprintf ppf_dump "    <- referenced directly from code \
+              (not through a symbol definition)@."
+        in
+        chain s
+      end)
+    !defs;
+  if not !found then
+    Format.fprintf ppf_dump "  (no defined symbol matches)@.";
+  Format.fprintf ppf_dump "@."
+
 let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
   let codes = get_flambda_codes units_to_link in
   let program =
@@ -397,6 +605,7 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
       ~f:(fun expr -> Flambda_iterators.iter note (fun _ -> ()) expr);
     Lambda.ensure_raise_count !max_id
   in
+  let stats_before = program_stats program in
   (* No [Flambda_invariants.check_exn] here: the concatenated program mixes
      variables from several compilation units (their [Set_of_closures_id] etc.
      deliberately keep their originating unit, which [Flambda_to_clambda] relies
@@ -428,7 +637,12 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
     let open Flambda in
     Let_symbol (Compilenv.current_unit_symbol (), Block (Tag.create_exn 0, []),
                 cleaned_program.program_body) in
-  let cleaned_program = { program with program_body } in
+  let cleaned_program = { cleaned_program with program_body } in
+  let stats_after = program_stats cleaned_program in
+  report_dce ~ppf_dump ~before:stats_before ~after:stats_after;
+  (match !Clflags.lto_why_live with
+   | None -> ()
+   | Some pattern -> why_live ~ppf_dump ~pattern cleaned_program);
   compile_implementation_flambda
     ~unit_prefix
     ~backend
