@@ -679,11 +679,16 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
   (match !Clflags.lto_why_live with
    | None -> ()
    | Some pattern -> why_live ~ppf_dump ~pattern cleaned_program);
-  compile_implementation_flambda
-    ~unit_prefix
-    ~backend
-    ~ppf_dump
-    cleaned_program;
+  (* The whole-program path deliberately skips [Flambda_invariants], so lower
+     with the Cmm invariant check always on: it catches malformed control flow
+     (e.g. duplicated continuation labels) at link time, where the alternative
+     is a Mach-level fatal error or a silent miscompilation. *)
+  Misc.protect_refs [Misc.R (Clflags.cmm_invariants, true)] (fun () ->
+    compile_implementation_flambda
+      ~unit_prefix
+      ~backend
+      ~ppf_dump
+      cleaned_program);
   (* This cmx file is never written. *)
   let unit_filename = unit_prefix ^ ".cmx" in
   let object_filename = unit_prefix ^ ext_obj in
