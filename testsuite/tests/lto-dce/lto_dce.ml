@@ -14,6 +14,16 @@
    -dlto-dce table, the eliminated-function listing, and the -dlto-why-live
    retention chain are all checked against the reference output.  -output-obj
    stops at a partial link, which is the only kind a -nopervasives program can
-   complete (no runtime library is linked in). *)
+   complete (no runtime library is linked in).
 
-let _r = Lib_dce.used 41
+   The conditional raise is an observable effect, so the [used] call feeding
+   it survives; [_pure] is dead pure initialization work (a call, so beyond
+   [Effect_analysis]) that the whole-program purity analysis removes. *)
+
+external raise : exn -> 'a = "%raise"
+
+exception Check
+
+let () = match Lib_dce.used 41 with 0 -> raise Check | _ -> ()
+
+let _pure = Lib_dce.used 7
