@@ -29,6 +29,21 @@
    startup function, where the labels collide unless [Flambda_to_clambda]
    allocates a fresh label per catch.  Before the fix this failed the
    always-on Cmm invariant check with "Continuation N was declared in more
-   than one handler" on caml_link_$entry. *)
+   than one handler" on caml_link_$entry.
 
-let _use = (Lib_dup1.r, Lib_dup2.s)
+   Both units must contribute the SAME field, and the reads must feed an
+   observable effect: the whole-program purity pass replaces unread pure
+   initializer fields with constants (and drops pure toplevel bindings), so
+   a plain [let _use = ...] would erase the reads and then the matches,
+   leaving no collision to detect; and reading [r] from one unit but [s]
+   from the other would leave the surviving matches with disjoint label
+   sets. *)
+
+external raise : exn -> 'a = "%raise"
+
+exception Check
+
+let () =
+  match Lib_dup1.r, Lib_dup2.r with
+  | (0, _), _ -> raise Check
+  | _ -> ()

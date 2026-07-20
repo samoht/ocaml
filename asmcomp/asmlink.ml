@@ -588,6 +588,169 @@ let why_live ~ppf_dump ~pattern (program : Flambda.program) =
     Format.fprintf ppf_dump "  (no defined symbol matches)@.";
   Format.fprintf ppf_dump "@."
 
+(* Whole-program purity through calls.
+
+   [Effect_analysis] must treat every [Apply] as effectful because a single
+   unit cannot see callee bodies, so a module initializer computed by a
+   function call ([let cli = make_cli ()]) is unremovable even when nothing
+   reads it.  At the -use-lto link the whole call graph is present:
+   [expr_no_effects] mirrors [Effect_analysis.no_effects] but resolves
+   direct calls through a set of known-pure functions, and
+   [compute_pure_functions] builds that set by monotone growth from the
+   pessimistic start.  Starting empty keeps every (mutually) recursive
+   function impure, which is the sound choice for termination: an
+   initializer that diverges must not be removed.  Indirect calls, sends,
+   and loops remain impure, as in the base analysis. *)
+let rec expr_no_effects ~pure (expr : Flambda.t) =
+  match expr with
+  | Var _ | Proved_unreachable -> true
+  | Apply { kind = Direct closure_id; _ } ->
+    Closure_id.Set.mem closure_id pure
+  | Apply { kind = Indirect; _ } -> false
+  | Let { defining_expr; body; _ } ->
+    named_no_effects ~pure defining_expr && expr_no_effects ~pure body
+  | Let_mutable { body; _ } -> expr_no_effects ~pure body
+  | If_then_else (_, ifso, ifnot) ->
+    expr_no_effects ~pure ifso && expr_no_effects ~pure ifnot
+  | Switch (_, sw) ->
+    List.for_all (fun (_, e) -> expr_no_effects ~pure e) sw.consts
+    && List.for_all (fun (_, e) -> expr_no_effects ~pure e) sw.blocks
+    && Option.fold ~some:(expr_no_effects ~pure) ~none:true sw.failaction
+  | String_switch (_, sw, def) ->
+    List.for_all (fun (_, e) -> expr_no_effects ~pure e) sw
+    && Option.fold ~some:(expr_no_effects ~pure) ~none:true def
+  | Static_catch (_, _, body, _) | Try_with (body, _, _) ->
+    (* As in [Effect_analysis]: a raise in [body] makes the whole
+       expression effectful, so the handler need not be examined. *)
+    expr_no_effects ~pure body
+  | While _ | For _ | Send _ | Assign _ | Static_raise _ -> false
+
+and named_no_effects ~pure (named : Flambda.named) =
+  match named with
+  | Expr e -> expr_no_effects ~pure e
+  | named -> Effect_analysis.no_effects_named named
+
+let compute_pure_functions program =
+  let bodies = ref Closure_id.Map.empty in
+  Flambda_iterators.iter_on_set_of_closures_of_program program
+    ~f:(fun ~constant:_ (set : Flambda.set_of_closures) ->
+      Variable.Map.iter
+        (fun fun_var (decl : Flambda.function_declaration) ->
+          bodies :=
+            Closure_id.Map.add (Closure_id.wrap fun_var) decl.body !bodies)
+        set.function_decls.funs);
+  let bodies = !bodies in
+  let rec grow pure =
+    let pure' =
+      Closure_id.Map.fold
+        (fun closure_id body acc ->
+          if Closure_id.Set.mem closure_id acc then acc
+          else if expr_no_effects ~pure:acc body then
+            Closure_id.Set.add closure_id acc
+          else acc)
+        bodies pure
+    in
+    if Closure_id.Set.cardinal pure' = Closure_id.Set.cardinal pure then pure
+    else grow pure'
+  in
+  grow Closure_id.Set.empty
+
+(* How each symbol is used by the rest of the program: the set of field
+   indices read from it, and whether it escapes as a first-class value
+   (any occurrence other than a constant-index [Read_symbol_field]:
+   [Symbol] in code, a constant block field, a [Project_closure], or being
+   a program result).  Runtime reads of a block field require the block as
+   a value first, so a non-escaping symbol's unread fields are provably
+   never consumed. *)
+let symbol_uses (program : Flambda.program) =
+  let escaped = ref Symbol.Set.empty in
+  let reads = ref Symbol.Map.empty in
+  let escape s = escaped := Symbol.Set.add s !escaped in
+  let read s i =
+    reads :=
+      Symbol.Map.update s
+        (function
+          | None -> Some (Numbers.Int.Set.singleton i)
+          | Some set -> Some (Numbers.Int.Set.add i set))
+        !reads
+  in
+  Flambda_iterators.iter_named_of_program program
+    ~f:(function
+      | Symbol s -> escape s
+      | Read_symbol_field (s, i) -> read s i
+      | _ -> ());
+  Flambda_iterators.iter_constant_defining_values_on_program program
+    ~f:(function
+      | Block (_, fields) ->
+        List.iter
+          (function
+            | (Symbol s : Flambda.constant_defining_value_block_field) ->
+              escape s
+            | Flambda.Const _ -> ())
+          fields
+      | Project_closure (s, _) -> escape s
+      | Allocated_const _ | Set_of_closures _ -> ());
+  let rec ends (body : Flambda.program_body) =
+    match body with
+    | Let_symbol (_, _, k) | Let_rec_symbol (_, k)
+    | Initialize_symbol (_, _, _, k) | Effect (_, k) -> ends k
+    | End syms -> Symbol.Set.iter escape syms
+  in
+  ends program.program_body;
+  !escaped, !reads
+
+(* Remove initialization work whose result is never consumed: fields of
+   non-escaping module blocks that no [Read_symbol_field] mentions are
+   replaced by a constant when their computation is pure (per
+   [expr_no_effects], so calls to pure functions count), and [Effect]
+   constructs that are pure under the same analysis are dropped.  The
+   references thus removed let the next cleanup round collect the closures
+   they kept alive. *)
+let remove_pure_initializers ~pure (program : Flambda.program) =
+  let escaped, reads = symbol_uses program in
+  let field_read s i =
+    match Symbol.Map.find_opt s reads with
+    | None -> false
+    | Some set -> Numbers.Int.Set.mem i set
+  in
+  let dummy () =
+    Flambda_utils.name_expr (Const (Int 0))
+      ~name:Internal_variable_names.const_zero
+  in
+  let rec walk (body : Flambda.program_body) : Flambda.program_body =
+    match body with
+    | Let_symbol (s, Block (tag, fields), k)
+      when not (Symbol.Set.mem s escaped) ->
+      let fields =
+        List.mapi
+          (fun i (field : Flambda.constant_defining_value_block_field) ->
+            match field with
+            | Symbol _ when not (field_read s i) ->
+              (Const (Int 0) : Flambda.constant_defining_value_block_field)
+            | field -> field)
+          fields
+      in
+      Let_symbol (s, Block (tag, fields), walk k)
+    | Let_symbol (s, def, k) -> Let_symbol (s, def, walk k)
+    | Let_rec_symbol (l, k) -> Let_rec_symbol (l, walk k)
+    | Initialize_symbol (s, tag, fields, k)
+      when not (Symbol.Set.mem s escaped) ->
+      let fields =
+        List.mapi
+          (fun i field ->
+            if field_read s i || not (expr_no_effects ~pure field) then field
+            else dummy ())
+          fields
+      in
+      Initialize_symbol (s, tag, fields, walk k)
+    | Initialize_symbol (s, tag, fields, k) ->
+      Initialize_symbol (s, tag, fields, walk k)
+    | Effect (e, k) when expr_no_effects ~pure e -> walk k
+    | Effect (e, k) -> Effect (e, walk k)
+    | End _ as body -> body
+  in
+  { program with program_body = walk program.program_body }
+
 let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
   let codes = get_flambda_codes units_to_link in
   let program =
@@ -639,6 +802,10 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
     let count = (program_stats program).fun_count in
     let program =
       Remove_unused_program_constructs.remove_unused_program_constructs program
+    in
+    let program =
+      let pure = compute_pure_functions program in
+      remove_pure_initializers ~pure program
     in
     let program =
       Remove_unused_closure_vars.remove_unused_closure_variables
