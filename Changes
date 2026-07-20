@@ -21,6 +21,13 @@ OCaml 5.5.0+lto
   style of mold's `--why-live`.
   (Thomas Gazagnaire)
 
+- Add `-lto-inline`, an opt-in flag enabling the inliner during the
+  `-use-lto` whole-program link with the budgets supplied on the link
+  command line, so cross-unit webs such as CamlinternalFormat's printf
+  interpreter can be specialised away.  Off by default: default-budget
+  inlining grows large programs.
+  (Thomas Gazagnaire)
+
 OCaml 5.5.0 (19 June 2026)
 -------------------------
 

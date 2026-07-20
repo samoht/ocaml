@@ -73,6 +73,13 @@ let mk_whole_program_rebuild f =
     compiler configured with --enable-lto"
 ;;
 
+let mk_lto_inline f =
+  "-lto-inline", Arg.Unit f, " Enable the inliner during the -use-lto \
+    whole-program link.  Combine with -O3, -inline and -inline-max-unroll \
+    to specialise interpreters over statically known data; may grow large \
+    programs"
+
+
 let mk_compact f =
   "-compact", Arg.Unit f, " Optimize code size rather than speed"
 
@@ -1025,6 +1032,7 @@ module type Optcommon_options = sig
   val _no_insn_sched : unit -> unit
   val _linscan : unit -> unit
   val _whole_program_rebuild : unit -> unit
+  val _lto_inline : unit -> unit
   val _no_float_const_prop : unit -> unit
 
   val _clambda_checks : unit -> unit
@@ -1323,6 +1331,7 @@ struct
     mk_clambda_checks F._clambda_checks;
     mk_classic_inlining F._classic_inlining;
     mk_whole_program_rebuild F._whole_program_rebuild;
+    mk_lto_inline F._lto_inline;
     mk_color F._color;
     mk_error_style F._error_style;
     mk_compact F._compact;
@@ -1765,6 +1774,7 @@ module Default = struct
       if not Config.flambda then
         Compenv.fatal "-use-lto is only supported by the flambda compiler";
       whole_program_rebuild := true
+    let _lto_inline () = lto_inline := true
     let _compact = clear optimize_for_speed
     let _dalloc = set dump_regalloc
     let _dclambda = set dump_clambda

@@ -202,6 +202,7 @@ let afl_inst_ratio = ref 100           (* -afl-inst-ratio *)
 let whole_program_rebuild = ref false  (* -use-lto *)
 let dump_lto_dce = ref false           (* -dlto-dce *)
 let lto_why_live = ref (None : string option) (* -dlto-why-live *)
+let lto_inline = ref false             (* -lto-inline *)
 
 let function_sections = ref Config.function_sections
                                         (* -function-sections *)
