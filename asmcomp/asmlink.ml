@@ -613,17 +613,35 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
   if !Clflags.dump_rawflambda then
     Format.fprintf ppf_dump "After concatenation:@ %a@."
       Flambda.print_program program;
-  let cleaned_program =
-    Remove_unused_program_constructs.remove_unused_program_constructs program
+  (* Iterate the cleanup to a fixpoint: eliminating a function or an unused
+     closure variable can drop the last reference to another symbol, so each
+     round can expose more dead code.  Terminates because a further round is
+     only attempted while the function count strictly shrinks. *)
+  let rec clean program =
+    let count = (program_stats program).fun_count in
+    let program =
+      Remove_unused_program_constructs.remove_unused_program_constructs program
+    in
+    let program =
+      Remove_unused_closure_vars.remove_unused_closure_variables
+        ~remove_direct_call_surrogates:false program
+    in
+    let program =
+      Inline_and_simplify.run
+        ~never_inline:true
+        ~ppf_dump
+        ~backend
+        ~prefixname:"_link_"
+        ~round:0
+        program
+    in
+    if (program_stats program).fun_count < count then clean program
+    else program
   in
+  let cleaned_program = clean program in
   let cleaned_program =
-    Inline_and_simplify.run
-      ~never_inline:true
-      ~ppf_dump
-      ~backend
-      ~prefixname:"_link_"
-      ~round:0
-      cleaned_program
+    Remove_unused_closure_vars.remove_unused_closure_variables
+      ~remove_direct_call_surrogates:true cleaned_program
   in
   let cleaned_program = Lift_constants.lift_constants ~backend cleaned_program in
   let cleaned_program = Share_constants.share_constants cleaned_program in
