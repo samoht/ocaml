@@ -57,6 +57,7 @@ let align_double = true
 let align_int64 = true
 let function_sections = false
 let afl_instrument = false
+let cmx_contains_all_code = false
 let native_compiler = false
 let tsan = false
 let architecture = "none"

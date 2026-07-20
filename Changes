@@ -1,3 +1,20 @@
+OCaml 5.4.1+lto
+---------------
+
+### Code generation and optimizations:
+
+- #608: Add `-use-lto`, whole-program dead code elimination for flambda.
+  A compiler configured with the new `--enable-lto` option stores each
+  unit's flambda program in its `.cmx` files; linking with `-use-lto`
+  re-runs the middle end over the concatenated program and drops every
+  function nothing reaches.  A `-use-lto` link that meets a module
+  without stored code reports it with the new warning 76
+  (module-compiled-without-lto) and falls back to a normal link.
+  An `--enable-lto` compiler also stops emitting warning 58
+  (no-cmx-file) at compile time: the cross-module information a
+  per-unit compilation misses is back in view at the `-use-lto` link.
+  (Pierre Chambart, adapted and extended by Thomas Gazagnaire)
+
 OCaml 5.4.1 (17 February 2026)
 ------------------------------
 

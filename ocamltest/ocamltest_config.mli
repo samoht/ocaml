@@ -88,6 +88,9 @@ val ocamlsrcdir : string
 val flambda : bool
 (** Whether flambda has been enabled at configure time *)
 
+val lto : bool
+(** Whether the compiler was configured with --enable-lto *)
+
 val flat_float_array : bool
 (* Whether the compiler was configured with --enable-flat-float-array *)
 

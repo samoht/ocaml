@@ -115,6 +115,7 @@ type t =
   | Generative_application_expects_unit     (* 73 *)
   | Degraded_to_partial_match               (* 74 *)
   | Unnecessarily_partial_tuple_pattern     (* 75 *)
+  | Module_compiled_without_lto of string   (* 76 *)
 
 (* If you remove a warning, leave a hole in the numbering.  NEVER change
    the numbers of existing warnings.
@@ -198,12 +199,13 @@ let number = function
   | Generative_application_expects_unit -> 73
   | Degraded_to_partial_match -> 74
   | Unnecessarily_partial_tuple_pattern -> 75
+  | Module_compiled_without_lto _ -> 76
 ;;
 (* DO NOT REMOVE the ;; above: it is used by
    the testsuite/ests/warnings/mnemonics.mll test to determine where
    the  definition of the number function above ends *)
 
-let last_warning_number = 75
+let last_warning_number = 76
 
 type description =
   { number : int;
@@ -551,6 +553,11 @@ let descriptions = [
     names = ["unnecessarily-partial-tuple-pattern"];
     description = "A tuple pattern ends in .. but fully matches its expected \
                    type.";
+    since = since 5 4 };
+  { number = 76;
+    names = ["module-compiled-without-lto"];
+    description = "A -use-lto link met a module without stored \
+                   whole-program code.";
     since = since 5 4 };
 ]
 
@@ -1262,6 +1269,14 @@ let message = function
         "This tuple pattern@ unnecessarily@ ends in %a,@ as@ it@ explicitly@ \
          matches@ all@ components@ of@ its@ expected@ type."
         Style.inline_code ".."
+  | Module_compiled_without_lto name ->
+      msg
+        "Module %a@ carries@ no@ stored@ whole-program@ code@ \
+         (it@ was@ built@ by@ a@ compiler@ configured@ without@ %a),@ \
+         so@ %a@ is@ ignored@ for@ this@ link."
+        Style.inline_code name
+        Style.inline_code "--enable-lto"
+        Style.inline_code "-use-lto"
 ;;
 
 let nerrors = ref 0

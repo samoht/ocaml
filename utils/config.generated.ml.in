@@ -69,6 +69,7 @@ let align_int64 = @align_int64@
 
 let function_sections = @function_sections@
 let afl_instrument = @afl@
+let cmx_contains_all_code = @lto@
 
 let native_compiler = @native_compiler@
 

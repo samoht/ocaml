@@ -68,6 +68,11 @@ let mk_cmi_file f =
   "-cmi-file", Arg.String f,
     "<file>  Use the <file> interface file to type-check"
 
+let mk_whole_program_rebuild f =
+  "-use-lto", Arg.Unit f, " Eliminate dead code at link time. Requires a \
+    compiler configured with --enable-lto"
+;;
+
 let mk_compact f =
   "-compact", Arg.Unit f, " Optimize code size rather than speed"
 
@@ -978,6 +983,7 @@ module type Optcommon_options = sig
   val _insn_sched : unit -> unit
   val _no_insn_sched : unit -> unit
   val _linscan : unit -> unit
+  val _whole_program_rebuild : unit -> unit
   val _no_float_const_prop : unit -> unit
 
   val _clambda_checks : unit -> unit
@@ -1269,6 +1275,7 @@ struct
     mk_cmi_file F._cmi_file;
     mk_clambda_checks F._clambda_checks;
     mk_classic_inlining F._classic_inlining;
+    mk_whole_program_rebuild F._whole_program_rebuild;
     mk_color F._color;
     mk_error_style F._error_style;
     mk_compact F._compact;
@@ -1702,6 +1709,10 @@ module Default = struct
     let _S = set keep_asm_file
     let _clambda_checks () = clambda_checks := true
     let _classic_inlining () = classic_inlining := true
+    let _whole_program_rebuild () =
+      if not Config.flambda then
+        Compenv.fatal "-use-lto is only supported by the flambda compiler";
+      whole_program_rebuild := true
     let _compact = clear optimize_for_speed
     let _dalloc = set dump_regalloc
     let _dclambda = set dump_clambda

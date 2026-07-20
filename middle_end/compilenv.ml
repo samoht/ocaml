@@ -220,9 +220,15 @@ let get_global_info global_ident = (
                                (filename, p1, current_unit.ui_name, p2))));
             (Some ui, Some crc)
           with Not_found ->
-            let warn = Warnings.No_cmx_file modname in
-              Location.prerr_warning Location.none warn;
-              (None, None)
+            (* A compiler that stores whole-program code (--enable-lto)
+               keeps every unit's body in its .cmx: what this per-unit
+               compilation cannot see is back in view at a -use-lto link,
+               and a module truly absent from a link is a link error in
+               its own right.  Only warn when no such recovery exists. *)
+            if not Config.cmx_contains_all_code then
+              Location.prerr_warning Location.none
+                (Warnings.No_cmx_file modname);
+            (None, None)
           end
       in
       current_unit.ui_imports_cmx <-

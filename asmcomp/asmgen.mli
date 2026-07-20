@@ -36,6 +36,12 @@ val compile_implementation
 val compile_implementation_linear :
     Unit_info.t -> unit
 
+val end_gen_implementation
+  : ?toplevel:(string -> bool)
+ -> ppf_dump:Format.formatter
+ -> Clambda.with_constants
+ -> unit
+
 val compile_phrase :
     ppf_dump:Format.formatter -> Cmm.phrase -> unit
 

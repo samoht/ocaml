@@ -212,14 +212,7 @@ let flambda_raw_clambda_dump_if ppf
   if !Clflags.dump_cmm then Format.fprintf ppf "@.cmm:@.";
   input
 
-let lambda_to_clambda ~backend ~prefixname ~ppf_dump
-      (program : Lambda.program) =
-  let program =
-    lambda_to_flambda ~ppf_dump ~prefixname ~backend
-      ~size:program.main_module_block_size
-      ~module_ident:program.module_ident
-      ~module_initializer:program.code
-  in
+let flambda_to_clambda ~backend ~ppf_dump (program : Flambda.program) =
   let export = Build_export_info.build_transient ~backend program in
   let clambda, preallocated_blocks, constants =
     Profile.record_call "backend" (fun () ->
@@ -245,3 +238,13 @@ let lambda_to_clambda ~backend ~prefixname ~ppf_dump
       (Symbol.Map.bindings constants)
   in
   clambda, preallocated_blocks, constants
+
+let lambda_to_clambda ~backend ~prefixname ~ppf_dump
+      (program : Lambda.program) =
+  let program =
+    lambda_to_flambda ~ppf_dump ~prefixname ~backend
+      ~size:program.main_module_block_size
+      ~module_ident:program.module_ident
+      ~module_initializer:program.code
+  in
+  flambda_to_clambda ~backend ~ppf_dump program

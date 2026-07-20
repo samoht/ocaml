@@ -102,7 +102,7 @@ stdlib.cma: $(OBJS)
 	$(V_LINKC)$(CAMLC) -a -o $@ $^
 
 stdlib.cmxa: $(OBJS:.cmo=.cmx)
-	$(V_LINKOPT)$(CAMLOPT) -a -o $@ $^
+	$(V_LINKOPT)$(CAMLOPT) $(OPTLIBFLAGS) -a -o $@ $^
 
 .PHONY: distclean
 distclean: clean

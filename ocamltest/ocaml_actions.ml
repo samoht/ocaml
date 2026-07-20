@@ -1137,6 +1137,20 @@ let no_flambda = make
     "support for flambda disabled"
     "support for flambda enabled")
 
+let lto = Actions.make
+  ~name:"lto"
+  ~description:"Passes if the compiler is configured with --enable-lto"
+  (Actions_helpers.pass_or_skip Ocamltest_config.lto
+    "compiler configured with --enable-lto"
+    "compiler configured without --enable-lto")
+
+let no_lto = make
+  ~name:"no-lto"
+  ~description:"Passes if the compiler is NOT configured with --enable-lto"
+  (Actions_helpers.pass_or_skip (not Ocamltest_config.lto)
+    "compiler configured without --enable-lto"
+    "compiler configured with --enable-lto")
+
 let shared_libraries = Actions.make
   ~name:"shared-libraries"
   ~description:"Passes if shared libraries are supported"
@@ -1394,6 +1408,8 @@ let _ =
     no_flat_float_array;
     flambda;
     no_flambda;
+    lto;
+    no_lto;
     shared_libraries;
     no_shared_libraries;
     native_compiler;

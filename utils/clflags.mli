@@ -219,6 +219,7 @@ val classic_inlining : bool ref
 val afl_instrument : bool ref
 val afl_inst_ratio : int ref
 val function_sections : bool ref
+val whole_program_rebuild : bool ref
 
 val all_passes : string list ref
 val dumped_pass : string -> bool

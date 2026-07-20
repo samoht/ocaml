@@ -80,7 +80,8 @@ endif
 
 $(LIBNAME).cmxa: $(CAMLOBJS_NAT)
 ifeq "$(COBJS)" ""
-	$(V_OCAMLOPT)$(CAMLOPT) -o $@ -a -linkall $(CAMLOBJS_NAT) $(LINKOPTS)
+	$(V_OCAMLOPT)$(CAMLOPT) -o $@ -a -linkall $(CAMLOBJS_NAT) $(LINKOPTS) \
+	  $(OPTLINKFLAGS)
 else
 	$(V_OCAMLMKLIB)$(MKLIB) -o $(LIBNAME) -oc $(CLIBNAME_NATIVE) -ocamlopt '$(CAMLOPT)' \
                 -linkall $(CAMLOBJS_NAT) $(LINKOPTS)
