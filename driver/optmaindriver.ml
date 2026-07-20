@@ -127,7 +127,7 @@ let main argv ppf =
       Compmisc.init_path ();
       Compmisc.with_ppf_dump ~file_prefix:target (fun ppf_dump ->
           let objs = Compenv.get_objfiles ~with_ocamlparam:true in
-          Asmlink.link ~ppf_dump objs target);
+          Asmlink.link ~backend ~ppf_dump objs target);
       Warnings.check_fatal ();
     end;
   with

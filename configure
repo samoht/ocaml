@@ -831,6 +831,7 @@ windows_unicode
 cmm_invariants
 flambda_invariants
 flambda
+lto
 frame_pointers
 reserved_header_bits
 install_ocamlnat
@@ -1050,6 +1051,7 @@ enable_installing_bytecode_programs
 enable_native_compiler
 enable_flambda
 enable_flambda_invariants
+enable_lto
 enable_cmm_invariants
 with_target_sh
 with_additional_stublibsdir
@@ -1762,6 +1764,7 @@ Optional Features:
   --enable-flambda        enable flambda optimizations
   --enable-flambda-invariants
                           enable invariants checks in flambda
+  --enable-lto            enable linking time optimizations
   --enable-cmm-invariants enable invariants checks in Cmm
   --enable-reserved-header-bits=BITS
                           reserve BITS (between 0 and 31) bits in block
@@ -4319,6 +4322,13 @@ fi
 if test ${enable_flambda_invariants+y}
 then :
   enableval=$enable_flambda_invariants;
+fi
+
+
+# Check whether --enable-lto was given.
+if test ${enable_lto+y}
+then :
+  enableval=$enable_lto;
 fi
 
 
@@ -24028,6 +24038,13 @@ fi
 else $as_nop
   flambda=false
   flambda_invariants=false
+fi
+
+if test x"$enable_lto" = "xyes"
+then :
+  lto=true
+else $as_nop
+  lto=false
 fi
 
 if $flambda

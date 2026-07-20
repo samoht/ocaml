@@ -524,7 +524,16 @@ let build_transient ~(backend : (module Backend_intf.S))
   if !Clflags.opaque then
     let compilation_unit = Compilenv.current_unit () in
     let root_symbol = Compilenv.current_unit_symbol () in
-    Export_info.opaque_transient ~root_symbol ~compilation_unit
+    (* No code is stored for an -opaque unit, even when the compiler is
+       configured to store it.  -opaque promises that the cmx digest depends
+       only on what dependents may assume, so recompiling the same source in
+       another directory must produce an identical digest and remain
+       swappable at link time (testsuite/tests/opaque); stored code embeds
+       source paths through its debug info and breaks that.  Such a unit
+       consequently cannot take part in a -use-lto link, which the link
+       reports (Module_compiled_without_lto), and dependents warn at compile
+       time (warning 76). *)
+    Export_info.opaque_transient ~root_symbol ~compilation_unit ~code:None
   else
     (* CR-soon pchambart: Should probably use that instead of the ident of
        the module as global identifier.
@@ -703,6 +712,12 @@ let build_transient ~(backend : (module Backend_intf.S))
         (fun key _ -> Symbol.Set.mem key relevant_symbols)
         symbol_id
     in
+    let code =
+      if Config.cmx_contains_all_code then
+        Some program
+      else
+        None
+    in
     Export_info.create_transient ~values
       ~symbol_id
       ~sets_of_closures
@@ -712,3 +727,4 @@ let build_transient ~(backend : (module Backend_intf.S))
       ~relevant_imported_closure_ids
       ~relevant_local_vars_within_closure
       ~relevant_imported_vars_within_closure
+      ~code

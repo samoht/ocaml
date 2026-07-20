@@ -484,6 +484,8 @@ let read_one_param ppf position name v =
 
   |  "keywords"  -> Clflags.keyword_edition := Some v
 
+  | "use-lto" -> set "use-lto" [ Clflags.whole_program_rebuild ] v
+
   | _ ->
     if not (List.mem name !can_discard) then begin
       can_discard := name :: !can_discard;

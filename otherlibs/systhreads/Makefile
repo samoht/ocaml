@@ -77,7 +77,7 @@ $(LIBNAME).cma: $(THREADS_BCOBJS)
 
 # See remark above: force static linking of libthreadsnat.a
 $(LIBNAME).cmxa: $(THREADS_NCOBJS)
-	$(V_LINKOPT)$(CAMLOPT) -linkall -a -cclib -lthreadsnat -o $@ $^
+	$(V_LINKOPT)$(CAMLOPT) $(OPTLINKFLAGS) -linkall -a -cclib -lthreadsnat -o $@ $^
 
 # The following lines produce two object files st_stubs.b.$(O) and
 # st_stubs.n.$(O) from the same source file st_stubs.c (it is compiled

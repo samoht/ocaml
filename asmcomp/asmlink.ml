@@ -203,7 +203,7 @@ let make_globals_map units_list ~crc_interfaces =
       (name, intf, None, []) :: acc)
     crc_interfaces defined
 
-let make_startup_file ~ppf_dump units_list ~crc_interfaces =
+let make_startup_file ~ppf_dump ~no_global_map ~crc_interfaces units_list =
   let need_stdlib =
     let needs_stdlib ({ui_need_stdlib; _}, _, _) = ui_need_stdlib in
     List.exists needs_stdlib units_list
@@ -243,8 +243,12 @@ let make_startup_file ~ppf_dump units_list ~crc_interfaces =
         "caml_standard_library_nat" standard_library_default)
   end;
   compile_phrase (Cmm_helpers.global_table name_list);
-  let globals_map = make_globals_map units_list ~crc_interfaces in
-  compile_phrase (Cmm_helpers.globals_map globals_map);
+  if not no_global_map then begin
+    let globals_map = make_globals_map units_list ~crc_interfaces in
+    compile_phrase (Cmm_helpers.globals_map globals_map);
+  end else begin
+    compile_phrase (Cmm_helpers.globals_map [])
+  end;
   compile_phrase(Cmm_helpers.data_segment_table ("_startup" :: name_list));
   if !Clflags.function_sections then
     compile_phrase
@@ -336,9 +340,136 @@ let call_linker file_list startup_file output_name =
   if not (exitcode = 0)
   then raise(Error(Linking_error exitcode))
 
+let units_without_stored_code units_to_link =
+  assert(Config.flambda);
+  List.filter_map (fun (info, _, _) ->
+    match info.Cmx_format.ui_export_info with
+    | Clambda _ -> assert false
+    | Flambda { Export_info.code = None } -> Some info.Cmx_format.ui_name
+    | Flambda { Export_info.code = Some _ } -> None)
+    units_to_link
+
+let get_flambda_codes units_to_link =
+  assert(Config.flambda);
+  List.map (fun (info, _, _) ->
+    match info.Cmx_format.ui_export_info with
+    | Clambda _ -> assert false
+    | Flambda { Export_info.code } ->
+      match code with
+      | None ->
+        (* [link] only starts a whole-program rebuild once
+           [units_without_stored_code] came back empty. *)
+        assert false
+      | Some code ->
+        code)
+    units_to_link
+
+let copy_unit_info unit =
+  { unit with ui_name = unit.Cmx_format.ui_name }
+
+let compile_implementation_flambda ~unit_prefix ~backend
+  ~ppf_dump (program : Flambda.program) =
+  Asmgen.compile_unit
+    ~output_prefix:unit_prefix
+    ~asm_filename:(unit_prefix ^ ext_asm)
+    ~keep_asm:!Clflags.keep_asm_file
+    ~obj_filename:(unit_prefix ^ ext_obj)
+  (fun () ->
+    let clambda_with_constants =
+      Flambda_middle_end.flambda_to_clambda ~backend ~ppf_dump program
+    in
+    Asmgen.end_gen_implementation ~ppf_dump clambda_with_constants)
+
+let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
+  let codes = get_flambda_codes units_to_link in
+  let program =
+    Flambda_utils.clear_all_exported_symbols
+      (Flambda_utils.concatenate codes)
+  in
+  let compilation_unit =
+    Compilation_unit.create
+      (Ident.create_persistent "_link_")
+      (Linkage_name.create "_link_");
+  in
+  Compilation_unit.set_current compilation_unit;
+  let program = Flambda_utils.replace_compilation_unit_of_symbols compilation_unit program in
+  (* No [Flambda_invariants.check_exn] here: the concatenated program mixes
+     variables from several compilation units (their [Set_of_closures_id] etc.
+     deliberately keep their originating unit, which [Flambda_to_clambda] relies
+     on), so it does not satisfy the single-unit invariant. *)
+  if !Clflags.dump_rawflambda then
+    Format.fprintf ppf_dump "After concatenation:@ %a@."
+      Flambda.print_program program;
+  let cleaned_program =
+    Remove_unused_program_constructs.remove_unused_program_constructs program
+  in
+  let cleaned_program =
+    Inline_and_simplify.run
+      ~never_inline:true
+      ~ppf_dump
+      ~backend
+      ~prefixname:"_link_"
+      ~round:0
+      cleaned_program
+  in
+  let cleaned_program = Lift_constants.lift_constants ~backend cleaned_program in
+  let cleaned_program = Share_constants.share_constants cleaned_program in
+  let cleaned_program = Remove_unused_program_constructs.remove_unused_program_constructs cleaned_program in
+  if !Clflags.dump_flambda then
+    Format.fprintf ppf_dump "After cleaning:@ %a@."
+      Flambda.print_program cleaned_program;
+  Compilenv.reset "_link_";
+  let unit_prefix = Filename.temp_file "caml_link" "" in
+  let program_body =
+    let open Flambda in
+    Let_symbol (Compilenv.current_unit_symbol (), Block (Tag.create_exn 0, []),
+                cleaned_program.program_body) in
+  let cleaned_program = { program with program_body } in
+  compile_implementation_flambda
+    ~unit_prefix
+    ~backend
+    ~ppf_dump
+    cleaned_program;
+  (* This cmx file is never written. *)
+  let unit_filename = unit_prefix ^ ".cmx" in
+  let object_filename = unit_prefix ^ ext_obj in
+  (* cmx information are mutable, we need to copy them
+     to prevent clobering from startup compilation. *)
+  let unit_infos = copy_unit_info (Compilenv.current_unit_infos ()) in
+  (* This synthetic cmx is never written and its CRC is never read: the startup
+     file below is built with [~no_global_map:true], which is what would consume
+     it. A -use-lto executable therefore has an empty globals map, so [Dynlink]
+     cannot see the statically linked units; that is fine for whole-program
+     targets (unikernels), which do not dynlink. *)
+  let digest = "----------------" in
+  let single_unit = [unit_infos, unit_filename, digest] in
+  (* [unit_prefix] is an empty temp file created by [Filename.temp_file]; remove
+     it along with the object we assembled. *)
+  [object_filename; unit_prefix], [object_filename],
+  (fun () -> make_startup_file ~ppf_dump ~no_global_map:true ~crc_interfaces single_unit)
+
 (* Main entry point *)
 
-let link ~ppf_dump objfiles output_name =
+let compile_startup_and_call_linker
+    ~removed_objects ~object_files ~output_name
+    ~make_startup =
+  let startup =
+    if !Clflags.keep_startup_file || !Emitaux.binary_backend_available
+    then output_name ^ ".startup" ^ ext_asm
+    else Filename.temp_file "camlstartup" ext_asm in
+  let startup_obj = Filename.temp_file "camlstartup" ext_obj in
+  Asmgen.compile_unit ~output_prefix:output_name
+    ~asm_filename:startup ~keep_asm:!Clflags.keep_startup_file
+    ~obj_filename:startup_obj
+    make_startup;
+  Misc.try_finally
+    (fun () ->
+      call_linker object_files startup_obj output_name)
+    ~always:(fun () ->
+       remove_file startup_obj;
+       List.iter remove_file removed_objects)
+
+let link ~backend ~ppf_dump objfiles output_name =
   Profile.record_call output_name (fun () ->
     let stdlib = "stdlib.cmxa" in
     let stdexit = "std_exit.cmx" in
@@ -359,20 +490,36 @@ let link ~ppf_dump objfiles output_name =
     Clflags.ccobjs := !Clflags.ccobjs @ !lib_ccobjs;
     Clflags.all_ccopts := !lib_ccopts @ !Clflags.all_ccopts;
                                                  (* put user's opts first *)
-    let startup =
-      if !Clflags.keep_startup_file || !Emitaux.binary_backend_available
-      then output_name ^ ".startup" ^ ext_asm
-      else Filename.temp_file "camlstartup" ext_asm in
-    let startup_obj = Filename.temp_file "camlstartup" ext_obj in
-    Asmgen.compile_unit ~output_prefix:output_name
-      ~asm_filename:startup ~keep_asm:!Clflags.keep_startup_file
-      ~obj_filename:startup_obj
-      (fun () -> make_startup_file ~ppf_dump units_tolink ~crc_interfaces);
-    Misc.try_finally
-      (fun () ->
-         call_linker (List.filter_map object_file_name_of_file obj_infos)
-           startup_obj output_name)
-      ~always:(fun () -> remove_file startup_obj)
+    let removed_objects, object_files, make_startup =
+      let whole_program_rebuild =
+        !Clflags.whole_program_rebuild && Config.flambda
+        && (match units_without_stored_code units_tolink with
+            | [] -> true
+            | missing ->
+                (* The only point where -use-lto actually meets each module:
+                   report the ones that cannot take part and link normally.
+                   [-warn-error +76] turns the fallback into a failure. *)
+                List.iter
+                  (fun name ->
+                     Location.prerr_warning Location.none
+                       (Warnings.Module_compiled_without_lto name))
+                  missing;
+                false)
+      in
+      if whole_program_rebuild then
+        link_whole_program ~backend ~ppf_dump ~crc_interfaces units_tolink
+      else
+        [],
+        List.filter_map object_file_name_of_file obj_infos,
+        (fun () ->
+           make_startup_file ~ppf_dump ~no_global_map:false ~crc_interfaces
+             units_tolink)
+    in
+    compile_startup_and_call_linker
+      ~removed_objects
+      ~object_files
+      ~output_name
+      ~make_startup
   )
 
 (* Error report *)

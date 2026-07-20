@@ -18,7 +18,9 @@
 open Misc
 open Format
 
-val link: ppf_dump:formatter -> string list -> string -> unit
+val link
+   : backend:(module Backend_intf.S)
+  -> ppf_dump:formatter -> string list -> string -> unit
 
 val link_shared: ppf_dump:formatter -> string list -> string -> unit
 

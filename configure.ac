@@ -279,6 +279,7 @@ AC_SUBST([reserved_header_bits])
 AC_SUBST([frame_pointers])
 AC_SUBST([flambda])
 AC_SUBST([flambda_invariants])
+AC_SUBST([lto])
 AC_SUBST([cmm_invariants])
 AC_SUBST([windows_unicode])
 AC_SUBST([align_double])
@@ -647,6 +648,10 @@ AC_ARG_ENABLE([flambda],
 AC_ARG_ENABLE([flambda-invariants],
   [AS_HELP_STRING([--enable-flambda-invariants],
     [enable invariants checks in flambda])])
+
+AC_ARG_ENABLE([lto],
+  [AS_HELP_STRING([--enable-lto],
+    [enable linking time optimizations])])
 
 AC_ARG_ENABLE([cmm-invariants],
   [AS_HELP_STRING([--enable-cmm-invariants],
@@ -2898,6 +2903,10 @@ AS_IF([test x"$enable_flambda" = "xyes"],
     [flambda_invariants=false])],
   [flambda=false
   flambda_invariants=false])
+
+AS_IF([test x"$enable_lto" = "xyes"],
+  [lto=true],
+  [lto=false])
 
 AS_IF([$flambda],
   [CMX_MAGIC_NUMBER=CMX_FLAMBDA__MAGIC_NUMBER

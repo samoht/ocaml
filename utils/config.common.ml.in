@@ -176,6 +176,7 @@ let configuration_variables () =
   p_bool "align_int64" align_int64;
   p_bool "function_sections" function_sections;
   p_bool "afl_instrument" afl_instrument;
+  p_bool "cmx_contains_all_code" cmx_contains_all_code;
   p_bool "tsan" tsan;
   p_bool "windows_unicode" windows_unicode;
   p_bool "supports_shared_libraries" supports_shared_libraries;

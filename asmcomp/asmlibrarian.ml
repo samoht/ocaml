@@ -26,12 +26,6 @@ type error =
 
 exception Error of error
 
-let default_ui_export_info =
-  if Config.flambda then
-    Cmx_format.Flambda Export_info.empty
-  else
-    Cmx_format.Clambda Clambda.Value_unknown
-
 let read_info name =
   let filename =
     try
@@ -44,7 +38,20 @@ let read_info name =
      since the compiler will go looking directly for .cmx files.
      The linker, which is the only one that reads .cmxa files, does not
      need the approximation. *)
-  info.ui_export_info <- default_ui_export_info;
+  let export_info =
+    match info.ui_export_info with
+    | Flambda export_info ->
+        if Config.cmx_contains_all_code then
+          (* A member without stored code is fully legitimate here: whether
+             it can take part in a -use-lto link is only known, and only
+             reported (warning 76), at that link. *)
+          Cmx_format.Flambda
+            Export_info.( empty_with_code ~code:export_info.code )
+        else
+          Cmx_format.Flambda Export_info.empty
+    | Clambda _ -> Cmx_format.Clambda Clambda.Value_unknown
+  in
+  info.ui_export_info <- export_info;
   filename, (info, crc)
 
 let create_archive file_list lib_name =

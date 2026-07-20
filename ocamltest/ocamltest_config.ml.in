@@ -61,6 +61,8 @@ let ocamlsrcdir = {@QS@|@ocamlsrcdir@|@QS@}
 
 let flambda = @flambda@
 
+let lto = @lto@
+
 let ocamlc_default_flags = ""
 let ocamlopt_default_flags = ""
 
