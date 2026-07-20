@@ -78,7 +78,7 @@ module type SYSDEPS = sig
   val is_relative : string -> bool
   val is_implicit : string -> bool
   val check_suffix : string -> string -> bool
-  val temp_dir_name : string
+  val temp_dir_name : unit -> string
   val quote : string -> string
   val quote_command :
     string -> ?stdin: string -> ?stdout: string -> ?stderr: string
@@ -101,7 +101,7 @@ module Unix : SYSDEPS = struct
   let check_suffix name suff =
     String.ends_with ~suffix:suff name
 
-  let temp_dir_name =
+  let temp_dir_name () =
     try Sys.getenv "TMPDIR" with Not_found -> "/tmp"
   let quote = generic_quote "'\\''"
   let quote_command cmd ?stdin ?stdout ?stderr args =
@@ -140,7 +140,6 @@ module Win32 : SYSDEPS = struct
       false
 
   external temp_dir_name: unit -> string = "caml_sys_temp_dir_name"
-  let temp_dir_name = temp_dir_name ()
 
   let quote s =
     let l = String.length s in
@@ -265,13 +264,20 @@ module Cygwin : SYSDEPS = struct
   let dirname = generic_dirname is_dir_sep current_dir_name
 end
 
+(* Dispatch on the compile-time [%ostype_*] constants rather than the
+   runtime [Sys.os_type] string: the selection folds during compilation,
+   so the two dead platform implementations are eliminated instead of
+   being retained by the runtime choice.  [temp_dir_name] is a function in
+   [SYSDEPS] and applied once here, so the one legitimate eager [getenv]
+   roots only itself rather than the entire selected module. *)
 module Sysdeps =
-  (val (match Sys.os_type with
-       | "Win32" -> (module Win32: SYSDEPS)
-       | "Cygwin" -> (module Cygwin: SYSDEPS)
-       | _ -> (module Unix: SYSDEPS)))
+  (val (if Sys.win32 then (module Win32: SYSDEPS)
+        else if Sys.cygwin then (module Cygwin: SYSDEPS)
+        else (module Unix: SYSDEPS)))
 
 include Sysdeps
+
+let temp_dir_name = temp_dir_name ()
 
 let concat dirname filename =
   let l = String.length dirname in
