@@ -1171,7 +1171,25 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
         sites >= 1 && sites <= format_specialise_max_sites)
   in
   let with_specialise_budgets f =
-    if not auto_specialise then f ()
+    if not auto_specialise then begin
+      (* Even without format specialisation, the cleanup rounds run with the
+         inliner enabled and every budget at zero: the only decisions that
+         fire below the thresholds are collapsing a function into its single
+         reachable call site (size-neutral: the original dies with its one
+         use) and what constant folding then exposes.  A device list that is
+         a literal at the program's only entry thus folds through the
+         backend's wrapper chain, and the branches it kills take their
+         cones with them. *)
+      let r x = Misc.R (x, !x) in
+      Misc.protect_refs
+        [ r Clflags.inline_threshold; r Clflags.inline_toplevel_threshold ]
+        (fun () ->
+          Clflags.Float_arg_helper.parse "0"
+            "single-use collapse" Clflags.inline_threshold;
+          Clflags.Int_arg_helper.parse "0"
+            "single-use collapse" Clflags.inline_toplevel_threshold;
+          f ())
+    end
     else begin
       let r x = Misc.R (x, !x) in
       Misc.protect_refs
@@ -1215,7 +1233,7 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
          itself is collected -- a large win on small images -- but its
          speed-oriented duplication grows large programs. *)
       Inline_and_simplify.run
-        ~never_inline:(not (!Clflags.lto_inline || auto_specialise))
+        ~never_inline:false
         ~ppf_dump
         ~backend
         ~prefixname:"_link_"
