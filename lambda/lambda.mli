@@ -511,6 +511,11 @@ val tag_of_lazy_tag : lazy_block_tag -> int
 (* Get a new static failure ident *)
 val next_raise_count : unit -> int
 
+(* Move the static-failure counter past ids deserialised from other
+   compilations, so freshly minted ids cannot collide with them (used by
+   the -use-lto whole-program link, whose input carries every unit's ids). *)
+val ensure_raise_count : int -> unit
+
 val staticfail : lambda (* Anticipated static failure *)
 
 (* Check anticipated failure, substitute its final value *)

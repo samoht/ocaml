@@ -375,6 +375,28 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
   in
   Compilation_unit.set_current compilation_unit;
   let program = Flambda_utils.replace_compilation_unit_of_symbols compilation_unit program in
+  (* Static exceptions in the concatenated program keep the numbering of
+     their producing compilations, each of which counted from zero -- as
+     does this process's [Lambda.next_raise_count], from which the
+     simplifier's freshening renames the static exceptions of every body it
+     duplicates.  A minted id equal to a deserialised one puts two unrelated
+     catches with the same number into one scope tree, and the next
+     duplication that renames either of them captures or orphans the raises
+     of the other, since the freshening map is keyed by the id.  Move the
+     counter past every deserialised id before any simplification runs. *)
+  let () =
+    let max_id = ref 0 in
+    let note (expr : Flambda.t) =
+      match expr with
+      | Static_raise (i, _) | Static_catch (i, _, _, _) ->
+        let i = Static_exception.to_int i in
+        if i > !max_id then max_id := i
+      | _ -> ()
+    in
+    Flambda_iterators.iter_exprs_at_toplevel_of_program program
+      ~f:(fun expr -> Flambda_iterators.iter note (fun _ -> ()) expr);
+    Lambda.ensure_raise_count !max_id
+  in
   (* No [Flambda_invariants.check_exn] here: the concatenated program mixes
      variables from several compilation units (their [Set_of_closures_id] etc.
      deliberately keep their originating unit, which [Flambda_to_clambda] relies
