@@ -31,13 +31,14 @@
    always-on Cmm invariant check with "Continuation N was declared in more
    than one handler" on caml_link_$entry.
 
-   Both units must contribute the SAME field, and the reads must feed an
-   observable effect: the whole-program purity pass replaces unread pure
-   initializer fields with constants (and drops pure toplevel bindings), so
-   a plain [let _use = ...] would erase the reads and then the matches,
-   leaving no collision to detect; and reading [r] from one unit but [s]
-   from the other would leave the surviving matches with disjoint label
-   sets. *)
+   Both units must contribute the SAME field, the reads must feed an
+   observable effect, and the scrutinees must be opaque: the whole-program
+   purity pass replaces unread pure initializer fields with constants (so a
+   plain [let _use = ...] would erase the reads and then the matches), the
+   partial evaluator executes any match it can decide (so a visible
+   scrutinee would evaluate the catches away), and reading [r] from one
+   unit but [s] from the other would leave the surviving matches with
+   disjoint label sets. *)
 
 external raise : exn -> 'a = "%raise"
 
