@@ -36,6 +36,27 @@ let for_primitive (prim : Clambda_primitives.primitive) =
                | "caml_sys_get_config" | "caml_sys_get_argv" ) } ->
       No_effects, No_coeffects
   | Pccall { prim_name =
+               ( "caml_string_equal" | "caml_string_notequal"
+               | "caml_string_compare"
+               | "caml_string_lessthan" | "caml_string_lessequal"
+               | "caml_string_greaterthan" | "caml_string_greaterequal"
+               | "caml_int_compare" | "caml_int32_compare"
+               | "caml_int64_compare" | "caml_nativeint_compare"
+               | "caml_float_compare" ) } ->
+      (* Pure comparisons: no observable effect and, on immutable data, no
+         coeffects.  Classifying them as arbitrary effects kept entire
+         runtime-dispatch initializers alive (e.g. Filename's Sys.os_type
+         match retaining both OS implementations under -use-lto). *)
+      No_effects, No_coeffects
+  | Pccall { prim_name =
+               ( "caml_bytes_equal" | "caml_bytes_notequal"
+               | "caml_bytes_compare"
+               | "caml_bytes_lessthan" | "caml_bytes_lessequal"
+               | "caml_bytes_greaterthan" | "caml_bytes_greaterequal" ) } ->
+      (* As above, but bytes are mutable: reading them is a coeffect, so
+         these must not be reordered, though an unused one may be deleted. *)
+      No_effects, Has_coeffects
+  | Pccall { prim_name =
                ( "caml_fresh_oo_id"
                | "caml_create_bytes" | "caml_create_string" ) } ->
       No_effects, Has_coeffects
