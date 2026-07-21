@@ -1382,6 +1382,12 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
       Remove_unused_closure_vars.remove_unused_closure_variables
         ~remove_direct_call_surrogates:false program
     in
+    (* Everything up to here only removes; it is committed unconditionally.
+       The inlining stage below is the only one that can grow the program,
+       so it alone is guarded: if its result is materially larger than the
+       snapshot, the stage is discarded and the round keeps the cleanups. *)
+    let shrunk = program in
+    let size_shrunk = (program_stats shrunk).total_size in
     let program =
       (* Inlining here is opt-in: with the whole program in view it can
          specialise an interpreter over its statically known data (unrolling
@@ -1395,6 +1401,24 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
         ~prefixname:"_link_"
         ~round:0
         program
+    in
+    let program =
+      (* Collect before judging: a single-use move counts twice until the
+         abandoned original is removed, so growth is only real if it
+         survives a cleanup of the inlined result. *)
+      Remove_unused_program_constructs.remove_unused_program_constructs
+        program
+    in
+    let program =
+      let sz = (program_stats program).total_size in
+      if sz > size_shrunk + size_shrunk / 4 then begin
+        Printf.eprintf
+          "-use-lto: inlining stage grew the program (%d -> %d size \
+           units); keeping the cleanups and discarding it\n%!"
+          size_shrunk sz;
+        shrunk
+      end
+      else program
     in
     if (program_stats program).fun_count < count then clean program
     else program
