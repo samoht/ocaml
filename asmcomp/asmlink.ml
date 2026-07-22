@@ -1326,7 +1326,10 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
         sites >= 1 && sites <= format_specialise_max_sites)
   in
   let with_specialise_budgets f =
-    if not auto_specialise then begin
+    if !Clflags.lto_inline then
+      (* An explicit request keeps the budgets supplied by the user. *)
+      f ()
+    else if not auto_specialise then begin
       (* Even without format specialisation, the cleanup rounds run with the
          inliner enabled and every budget at zero: the only decisions that
          fire below the thresholds are collapsing a function into its single

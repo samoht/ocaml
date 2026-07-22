@@ -1,0 +1,2 @@
+-use-lto: inlining stage grew the program (198 -> 944 size units); keeping the cleanups and discarding it
+-use-lto: kept 2 of 2 functions, eliminated 0 as dead code (0.0% of functions, 0.0% of code size)
