@@ -430,6 +430,17 @@ long functions and modules. On the other hand, the generated code can be a bit
 slower.
 }%nat
 
+\nat{%
+\item["-lto-inline"]
+Enable the inliner during a "-use-lto" whole-program link, with the
+inlining parameters supplied on the link command line (e.g. "-O3"
+"-inline" \var{n}).  With every unit's code available, the link can
+inline and specialise across compilation unit boundaries; this can
+substantially shrink programs dominated by generic code, but
+default-budget inlining tends to grow large programs, so the option is
+off by default.  See "-use-lto".
+}%nat
+
 \comp{%
 \item["-make-runtime"]
 Build a custom runtime system (in the file specified by option "-o")
@@ -837,6 +848,25 @@ Identify the types "string" and "bytes", thereby making strings writable.
 This is intended for compatibility with old source code and should not
 be used with new software. This option raises an error unconditionally
 since OCaml 5.0.
+
+\nat{%
+\item["-use-lto"]
+Perform whole-program dead code elimination at link time: the
+optimizer runs again over the code of all linked units at once and
+drops every function that nothing reaches.  Requires a flambda
+compiler configured with "--enable-lto", which stores each unit's
+complete intermediate code in the ".cmx" files it produces.  If a
+linked ".cmx" does not carry stored code (it was produced by a
+compiler configured without "--enable-lto"), warning 76 reports each
+such module and the link falls back to a normal link; use
+"-warn-error +76" to fail instead.  An "--enable-lto" compiler also
+stops emitting warning 58 (no-cmx-file) at compile time: what a
+per-unit compilation cannot see is back in view at the "-use-lto"
+link.  The
+"-dlto-dce" and "-dlto-why-live" flags report what was eliminated and
+why the remaining code is retained; "-lto-inline" additionally enables
+cross-unit inlining at the link.
+}%nat
 
 \comp{%
 \item["-use-runtime" \var{runtime-name}]
