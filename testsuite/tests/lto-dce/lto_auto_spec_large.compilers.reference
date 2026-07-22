@@ -1,0 +1,1 @@
+-use-lto: kept 22135 of 23068 functions, eliminated 933 as dead code (4.0% of functions, 18.6% of code size)

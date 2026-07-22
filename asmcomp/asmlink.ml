@@ -1048,6 +1048,13 @@ let format_machinery_units =
 
 let format_specialise_max_sites = 50
 
+(* The aggressive budgets used for format specialisation run the inliner over
+   the whole linked program, not just the format machinery.  A low site count
+   alone is therefore not a sufficient bound: a large application with one
+   format literal can still expand by orders of magnitude before the size
+   guard gets a chance to discard the result. *)
+let format_specialise_max_program_size = 250_000
+
 let count_format_entry_sites (program : Flambda.program) =
   let const_vars = ref Variable.Set.empty in
   let aliases = ref [] in
@@ -1322,6 +1329,7 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
      parameters are restored afterwards.  See [count_format_entry_sites]. *)
   let auto_specialise =
     (not !Clflags.lto_inline)
+    && stats_before.total_size <= format_specialise_max_program_size
     && (let sites = count_format_entry_sites program in
         sites >= 1 && sites <= format_specialise_max_sites)
   in
