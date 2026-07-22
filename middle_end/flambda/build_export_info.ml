@@ -524,16 +524,16 @@ let build_transient ~(backend : (module Backend_intf.S))
   if !Clflags.opaque then
     let compilation_unit = Compilenv.current_unit () in
     let root_symbol = Compilenv.current_unit_symbol () in
-    (* No code is stored for an -opaque unit, even when the compiler is
-       configured to store it.  -opaque promises that the cmx digest depends
-       only on what dependents may assume, so recompiling the same source in
-       another directory must produce an identical digest and remain
-       swappable at link time (testsuite/tests/opaque); stored code embeds
-       source paths through its debug info and breaks that.  Such a unit
-       consequently cannot take part in a -use-lto link, which the link
-       reports (Module_compiled_without_lto), and dependents warn at compile
-       time (warning 76). *)
-    Export_info.opaque_transient ~root_symbol ~compilation_unit ~code:None
+    (* Ordinary dependents still receive no approximation for an [-opaque]
+       unit.  An LTO-enabled compiler nevertheless stores its body so that
+       generated-at-link modules (which dune deliberately compiles opaque)
+       can take part in [-use-lto].  [Compilenv.write_unit_info] excludes this
+       body from the unit digest, preserving opaque-module interchangeability
+       and path-independent dependency digests. *)
+    let code =
+      if Config.cmx_contains_all_code then Some program else None
+    in
+    Export_info.opaque_transient ~root_symbol ~compilation_unit ~code
   else
     (* CR-soon pchambart: Should probably use that instead of the ident of
        the module as global identifier.

@@ -361,7 +361,27 @@ let write_unit_info info filename =
   output_string oc cmx_magic_number;
   output_value oc info;
   flush oc;
-  let crc = Digest.file filename in
+  let crc =
+    if Config.flambda && Config.cmx_contains_all_code && !Clflags.opaque then
+      (* [-opaque] promises that dependents may interchange implementations
+         with the same interface.  Keep that promise while storing an LTO
+         body in the file: its dependency digest is exactly the digest of the
+         code-free unit information that older opaque compilation produced.
+         The linker reads the real [info] above and can still consume its
+         whole-program body. *)
+      let digest_info =
+        match info.ui_export_info with
+        | Flambda export_info ->
+            { info with
+              ui_export_info =
+                Flambda (Export_info.without_code export_info) }
+        | Clambda _ -> assert false
+      in
+      Digest.string
+        (cmx_magic_number ^ Marshal.to_string digest_info [])
+    else
+      Digest.file filename
+  in
   Digest.output oc crc;
   close_out oc
 

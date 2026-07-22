@@ -125,6 +125,10 @@ val opaque_transient
     compilation. *)
 val empty_with_code : code:Flambda.program option -> t
 
+(** Remove the stored whole-program body without changing the information
+    available to ordinary cross-module optimisation. *)
+val without_code : t -> t
+
 (** Create a new export information structure. *)
 val create
    : sets_of_closures:(A.function_declarations Set_of_closures_id.Map.t)

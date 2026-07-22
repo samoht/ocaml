@@ -28,6 +28,12 @@ OCaml 5.4.1+lto
   inlining grows large programs.
   (Thomas Gazagnaire)
 
+- `-opaque` units can take part in `-use-lto` links: their `.cmx` now
+  stores the whole-program body while the unit digest is computed over
+  the code-free information, so identical sources still digest
+  identically and implementations stay swappable at link time.
+  (Thomas Gazagnaire)
+
 OCaml 5.4.1 (17 February 2026)
 ------------------------------
 
