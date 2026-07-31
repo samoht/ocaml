@@ -1,1 +1,1 @@
--use-lto: kept 2 of 2 functions, eliminated 0 as dead code (0.0% of functions, 0.0% of code size)
+-use-lto (lto_dup_labels.o): kept 2 of 2 functions, eliminated 0 as dead code (0.0% of functions, 0.0% of code size)

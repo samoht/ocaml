@@ -1,1 +1,1 @@
--use-lto: kept 0 of 1 functions, eliminated 1 as dead code (100.0% of functions, 100.0% of code size)
+-use-lto (lto_inline.o): kept 0 of 1 functions, eliminated 1 as dead code (100.0% of functions, 100.0% of code size)

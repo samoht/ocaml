@@ -1,4 +1,4 @@
--use-lto: kept 1 of 3 functions, eliminated 2 as dead code (66.7% of functions, 64.7% of code size)
+-use-lto (lto_dce.o): kept 1 of 3 functions, eliminated 2 as dead code (66.7% of functions, 64.7% of code size)
 
 -use-lto dead-code elimination by unit (sizes in inlining-cost units):
      dropped         kept  unit

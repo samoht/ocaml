@@ -423,7 +423,23 @@ let unit_of_origin origin =
     (Compilation_unit.get_persistent_ident
        (Closure_origin.get_compilation_unit origin))
 
-let report_dce ~ppf_dump ~(before : lto_stats) ~(after : lto_stats) =
+(* Name the link in its own reports: a parallel build runs many of them at
+   once and their messages interleave on one stderr.  Relative to the working
+   directory when the target is under it, so that the name stays the one the
+   build system used (dune links from the build root) and the testsuite's
+   expected output does not carry an absolute path. *)
+let display_output_name output_name =
+  if Filename.is_relative output_name then output_name
+  else begin
+    let prefix = Sys.getcwd () ^ Filename.dir_sep in
+    let n = String.length prefix in
+    if String.length output_name > n && String.sub output_name 0 n = prefix
+    then String.sub output_name n (String.length output_name - n)
+    else output_name
+  end
+
+let report_dce ~ppf_dump ~output_name ~(before : lto_stats)
+      ~(after : lto_stats) =
   let removed = before.fun_count - after.fun_count in
   let removed_size = before.total_size - after.total_size in
   let pct part whole =
@@ -431,9 +447,9 @@ let report_dce ~ppf_dump ~(before : lto_stats) ~(after : lto_stats) =
     else 100. *. float_of_int part /. float_of_int whole
   in
   Printf.eprintf
-    "-use-lto: kept %d of %d functions, eliminated %d as dead code \
+    "-use-lto (%s): kept %d of %d functions, eliminated %d as dead code \
      (%.1f%% of functions, %.1f%% of code size)\n%!"
-    after.fun_count before.fun_count removed
+    output_name after.fun_count before.fun_count removed
     (pct removed before.fun_count) (pct removed_size before.total_size);
   if !Clflags.dump_lto_dce then begin
     let kept origin = Closure_origin.Map.find_opt origin after.by_origin in
@@ -1298,7 +1314,9 @@ let mark_single_use_applies (program : Flambda.program) =
   in
   program, !marked
 
-let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
+let link_whole_program ~backend ~ppf_dump ~crc_interfaces ~output_name
+      units_to_link =
+  let output_name = display_output_name output_name in
   let codes = get_flambda_codes units_to_link in
   let program =
     Flambda_utils.clear_all_exported_symbols
@@ -1442,9 +1460,9 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
       let sz = (program_stats program).total_size in
       if sz > size_shrunk + size_shrunk / 4 then begin
         Printf.eprintf
-          "-use-lto: inlining stage grew the program (%d -> %d size \
+          "-use-lto (%s): inlining stage grew the program (%d -> %d size \
            units); keeping the cleanups and discarding it\n%!"
-          size_shrunk sz;
+          output_name size_shrunk sz;
         shrunk
       end
       else program
@@ -1452,18 +1470,29 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
     if (program_stats program).fun_count < count then clean program
     else program
   in
-  let cleaned_program = with_specialise_budgets (fun () -> clean program) in
+  (* Timed as its own pass: it is where a link that keeps losing the growth
+     guard spends its time, and -dtimings otherwise charges all of it to the
+     link's unlabelled remainder. *)
   let cleaned_program =
-    Remove_unused_closure_vars.remove_unused_closure_variables
-      ~remove_direct_call_surrogates:true cleaned_program
+    Profile.record_call "lto-cleanup" (fun () ->
+      let cleaned_program = with_specialise_budgets (fun () -> clean program) in
+      let cleaned_program =
+        Remove_unused_closure_vars.remove_unused_closure_variables
+          ~remove_direct_call_surrogates:true cleaned_program
+      in
+      let cleaned_program =
+        Lift_constants.lift_constants ~backend cleaned_program
+      in
+      let cleaned_program = Share_constants.share_constants cleaned_program in
+      (* After lifting, a fully preevaluated initializer's fields are single
+         [Symbol]/[Const] lets, which this converts to a static [Let_symbol]
+         block: no startup code remains for it at all. *)
+      let cleaned_program =
+        Initialize_symbol_to_let_symbol.run cleaned_program
+      in
+      Remove_unused_program_constructs.remove_unused_program_constructs
+        cleaned_program)
   in
-  let cleaned_program = Lift_constants.lift_constants ~backend cleaned_program in
-  let cleaned_program = Share_constants.share_constants cleaned_program in
-  (* After lifting, a fully preevaluated initializer's fields are single
-     [Symbol]/[Const] lets, which this converts to a static [Let_symbol]
-     block: no startup code remains for it at all. *)
-  let cleaned_program = Initialize_symbol_to_let_symbol.run cleaned_program in
-  let cleaned_program = Remove_unused_program_constructs.remove_unused_program_constructs cleaned_program in
   if !Clflags.dump_flambda then
     Format.fprintf ppf_dump "After cleaning:@ %a@."
       Flambda.print_program cleaned_program;
@@ -1475,7 +1504,7 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
                 cleaned_program.program_body) in
   let cleaned_program = { cleaned_program with program_body } in
   let stats_after = program_stats cleaned_program in
-  report_dce ~ppf_dump ~before:stats_before ~after:stats_after;
+  report_dce ~ppf_dump ~output_name ~before:stats_before ~after:stats_after;
   (match !Clflags.lto_why_live with
    | None -> ()
    | Some pattern -> why_live ~ppf_dump ~pattern cleaned_program);
@@ -1483,12 +1512,13 @@ let link_whole_program ~backend ~ppf_dump ~crc_interfaces units_to_link =
      with the Cmm invariant check always on: it catches malformed control flow
      (e.g. duplicated continuation labels) at link time, where the alternative
      is a Mach-level fatal error or a silent miscompilation. *)
-  Misc.protect_refs [Misc.R (Clflags.cmm_invariants, true)] (fun () ->
-    compile_implementation_flambda
-      ~unit_prefix
-      ~backend
-      ~ppf_dump
-      cleaned_program);
+  Profile.record_call "lto-codegen" (fun () ->
+    Misc.protect_refs [Misc.R (Clflags.cmm_invariants, true)] (fun () ->
+      compile_implementation_flambda
+        ~unit_prefix
+        ~backend
+        ~ppf_dump
+        cleaned_program));
   (* This cmx file is never written. *)
   let unit_filename = unit_prefix ^ ".cmx" in
   let object_filename = unit_prefix ^ ext_obj in
@@ -1566,7 +1596,8 @@ let link ~backend ~ppf_dump objfiles output_name =
                 false)
       in
       if whole_program_rebuild then
-        link_whole_program ~backend ~ppf_dump ~crc_interfaces units_tolink
+        link_whole_program ~backend ~ppf_dump ~crc_interfaces ~output_name
+          units_tolink
       else
         [],
         List.filter_map object_file_name_of_file obj_infos,
