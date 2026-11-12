@@ -1221,6 +1221,17 @@ let mark_single_use_applies (program : Flambda.program) =
       Flambda_iterators.iter visit_expr visit_named expr;
       Flambda_iterators.iter_all_immutable_let_bindings expr
         ~f:record_binding);
+  (* The closures bound to a variable that is also used as a value, indexed
+     once: [eligible] runs at every direct apply, so scanning [bound_to]
+     there made the pass quadratic in the size of the program. *)
+  let used_as_value =
+    Variable.Map.fold
+      (fun var cid acc ->
+        match Variable.Map.find_opt var !value_use with
+        | Some n when n > 0 -> Closure_id.Set.add cid acc
+        | None | Some _ -> acc)
+      !bound_to Closure_id.Set.empty
+  in
   let self_applies cid =
     match Closure_id.Map.find_opt cid bodies with
     | None -> max_int
@@ -1272,12 +1283,7 @@ let mark_single_use_applies (program : Flambda.program) =
            | Default_inline | Always_inline | Hint_inline | Unroll _ -> true)
           && not decl.stub
         | None -> false)
-    && Variable.Map.for_all
-         (fun var cid' ->
-           not (Closure_id.equal cid cid')
-           || (match Variable.Map.find_opt var !value_use with
-               | None -> true | Some n -> n <= 0))
-         !bound_to
+    && not (Closure_id.Set.mem cid used_as_value)
     && not (self_recursive cid)
     && not (declares_closures cid)
   in
